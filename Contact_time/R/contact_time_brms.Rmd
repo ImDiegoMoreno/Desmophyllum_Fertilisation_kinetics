@@ -1,0 +1,431 @@
+---
+title: "contact_time_brms"
+author: "Diego Moreno"
+date: "2025-11-26"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+
+Load libraries and data
+```{r}
+library(dplyr)
+library(brms)
+library(tidybayes)
+
+data<-read.delim2("../Data/contact_time_r.txt")
+
+```
+
+Prepare the data
+
+```{r}
+data_ct <- data %>% 
+  filter(SLS == "yes") %>%
+  mutate(
+    species = recode(Species,
+                     "Desmo"    = "D. dianthus",
+                     "Lophelia" = "D. pertusum"),
+    contact_time = factor(contact_time,
+                          levels = c("30sec","1min","5min","10min","30min","60min")),
+    log_conc = log10(concentration + 1)
+  )
+
+dat_dd <- data_ct %>% filter(species == "D. dianthus")
+dat_dp <- data_ct %>% filter(species == "D. pertusum") %>%
+  droplevels() 
+```
+
+Bayesian model for D. dianthus 
+
+```{r}
+library(brms)
+
+# priors for models WITH random effects (D. dianthus)
+priors_ct <- c(
+  prior(student_t(3, 0, 2.5), class = "Intercept"),
+  prior(normal(0, 2), class = "b"),
+  prior(exponential(2), class = "sd")
+)
+
+
+fit_dd <- brm(
+  eggs_fertilised | trials(eggs_found) ~ 
+        poly(log_conc, 2, raw = TRUE) * contact_time +
+        (1 | Experiment),
+  data   = dat_dd,
+  family = binomial(),
+  prior  = priors_ct,
+  chains = 4, iter = 4000, cores = 4,
+  control = list(adapt_delta = 0.95)
+)
+
+```
+
+D. pertusum (only one cross)
+Weakly informative priors for fixed effects
+model
+```{r}
+# priors for models WITHOUT random effects (D. pertusum)
+priors_ct_nore <- c(
+  prior(student_t(3, 0, 2.5), class = "Intercept"),
+  prior(normal(0, 2), class = "b")
+)
+
+fit_dp <- brm(
+  eggs_fertilised | trials(eggs_found) ~ 
+        poly(log_conc, 2, raw = TRUE) * contact_time,
+  data   = dat_dp,
+  family = binomial(),
+  prior  = priors_ct_nore,
+  chains = 4, iter = 4000, cores = 4,
+  control = list(adapt_delta = 0.95)
+)
+```
+
+checking both models
+
+```{r}
+## ---- Diagnostics for D. dianthus ----
+
+# numeric summary (includes R-hat and n_eff)
+summary(fit_dd)
+
+# quick overall checks
+max_rhat_dd  <- max(rhat(fit_dd))
+min_neff_dd  <- min(neff_ratio(fit_dd))
+
+max_rhat_dd
+min_neff_dd
+
+# trace plots for fixed effects
+plot(fit_dd)   # brms default: trace + density for a few parameters
+
+# posterior predictive check (more samples for a better feel)
+pp_check(fit_dd, ndraws = 100)
+
+
+## ---- Diagnostics for D. pertusum ----
+
+summary(fit_dp)
+
+max_rhat_dp  <- max(rhat(fit_dp))
+min_neff_dp  <- min(neff_ratio(fit_dp))
+
+max_rhat_dp
+min_neff_dp
+
+plot(fit_dp)
+pp_check(fit_dp, ndraws = 100)
+
+
+#how well does it fit?
+bayes_R2(fit_dd)
+bayes_R2(fit_dp)
+```
+
+
+predictions for plotting
+
+```{r}
+library(tidybayes)
+library(tidyr)
+
+make_grid <- function(dat) {
+  dat %>%
+    group_by(contact_time) %>%
+    summarize(
+      conc_min = min(concentration),
+      conc_max = max(concentration),
+      .groups = "drop"
+    ) %>%
+    rowwise() %>%
+    mutate(
+      concentration = list(seq(conc_min, conc_max, length.out = 100))
+    ) %>%
+    tidyr::unnest(concentration) %>%
+    mutate(
+      log_conc   = log10(concentration + 1),
+      eggs_found = 1          # <— key line
+    )
+}
+
+
+
+
+grid_dd <- make_grid(dat_dd) %>% mutate(species = "D. dianthus")
+grid_dp <- make_grid(dat_dp) %>% mutate(species = "D. pertusum")
+
+
+
+
+```
+
+
+```{r}
+library(tidybayes)
+```
+
+```{r}
+# Use only contact_time levels that the D. pertusum model actually saw
+allowed_ct_dp <- levels(fit_dp$data$contact_time)
+
+grid_dp_pred <- grid_dp %>%
+  dplyr::filter(contact_time %in% allowed_ct_dp) %>%
+  droplevels()
+
+```
+
+
+curves
+
+```{r}
+curves_dd <- grid_dd %>% 
+  add_epred_draws(fit_dd, re_formula = NA) %>%
+  mutate(p_fert = .epred)   # PROPORTION fertilised among eggs found
+
+curves_dp <- grid_dp_pred %>% 
+  add_epred_draws(fit_dp) %>%
+  mutate(p_fert = .epred)
+
+curves_all <- dplyr::bind_rows(curves_dd, curves_dp)
+```
+
+
+plot
+
+no legend
+```{r}
+library(ggplot2)
+library(viridisLite)
+library(patchwork)
+
+# full set of contact-time levels for plotting (we want empty panels)
+all_ct_levels <- c("30sec","1min","5min","10min","30min","60min")
+
+# split raw data by species
+raw_dd <- data_ct %>%
+  dplyr::filter(species == "D. dianthus") %>%
+  dplyr::mutate(
+    fert_prop    = eggs_fertilised / eggs_found,
+    contact_time = factor(contact_time, levels = all_ct_levels)
+  )
+
+raw_dp <- data_ct %>%
+  dplyr::filter(species == "D. pertusum") %>%
+  dplyr::mutate(
+    fert_prop    = eggs_fertilised / eggs_found,
+    contact_time = factor(contact_time, levels = all_ct_levels)
+  )
+
+# curves per species, but with full level set for plotting
+curves_dd_plot <- curves_dd %>%
+  dplyr::mutate(contact_time = factor(contact_time, levels = all_ct_levels))
+
+curves_dp_plot <- curves_dp %>%
+  dplyr::mutate(contact_time = factor(contact_time, levels = all_ct_levels))
+
+# colour palette for contact times
+contact_time_colors <- setNames(
+  viridis(length(all_ct_levels), option = "D", direction = -1),
+  all_ct_levels
+)
+
+# pretty x-axis label with mL^-1
+x_lab <- expression(paste("Sperm concentration (cells mL"^{-1}, ")"))
+
+# ---------------------
+# Plot for D. dianthus
+# ---------------------
+p_dd <- ggplot(
+  curves_dd_plot,
+  aes(x = concentration,
+      y = p_fert,
+      colour = contact_time,
+      fill   = contact_time)
+) +
+  #stat_lineribbon(.width = c(0.66, 0.95), alpha = 0.4) +
+  stat_lineribbon(.width = 0.95, alpha=0.4)+
+  geom_point(
+    data = raw_dd,
+    aes(x = concentration, y = fert_prop, colour = contact_time),
+    size = 1.6,
+    inherit.aes = FALSE
+  ) +
+  scale_colour_manual(values = contact_time_colors,
+                      drop   = FALSE,
+                      guide  = "none") +
+  scale_fill_manual(values = contact_time_colors,
+                    drop   = FALSE,
+                    guide  = "none") +
+  scale_y_continuous(
+    "Fertilisation (%)",
+    limits = c(0, 1),
+    breaks  = seq(0, 1, by = 0.25),
+    labels  = scales::label_percent(accuracy = 1)
+  ) +
+  scale_x_continuous(
+    NULL,
+    limits = c(0, 5000),
+    breaks = c(0,1000,2000,3000,4000,5000),
+    labels = c("0","1K","2K","3K","4K","5K")
+    #labels = scales::label_number(scale = 1e-3, suffix = "K")
+  ) +
+  facet_wrap(~ contact_time, nrow = 1, drop = FALSE) +
+  ggtitle("D. dianthus") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    panel.spacing = unit(0.5,"lines"),
+    strip.text.x    = element_text(size = 9),
+    plot.title      = element_text(face = "italic", hjust = 0),
+    legend.position = "none"
+  )
+
+# --------------------
+# Plot for D. pertusum
+# --------------------
+p_dp <- ggplot(
+  curves_dp_plot,
+  aes(x = concentration,
+      y = p_fert,
+      colour = contact_time,
+      fill   = contact_time)
+) +
+  #stat_lineribbon(.width = c(0.66, 0.95), alpha = 0.4) +
+  stat_lineribbon(.width = 0.95, alpha=0.4)+
+  geom_point(
+    data = raw_dp,
+    aes(x = concentration, y = fert_prop, colour = contact_time),
+    size = 1.6,
+    inherit.aes = FALSE
+  ) +
+  scale_colour_manual(values = contact_time_colors,
+                      drop   = FALSE,
+                      guide  = "none") +
+  scale_fill_manual(values = contact_time_colors,
+                    drop   = FALSE,
+                    guide  = "none") +
+  scale_y_continuous(
+    "Fertilisation (%)",
+    limits = c(0, 1),
+    breaks  = seq(0, 1, by = 0.25),
+    labels  = scales::label_percent(accuracy = 1)
+  ) +
+  scale_x_continuous(
+    x_lab,
+    limits = c(0, 6e5),
+    breaks = c(0, 2e5, 4e5, 6e5),
+    labels = c("0", "200K", "400K", "600K")
+    #labels = scales::label_number(scale = 1e-3, suffix = "K")
+  ) +
+  facet_wrap(~ contact_time, nrow = 1, drop = FALSE) +
+  ggtitle("D. pertusum") +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(size = 8),
+    axis.text.y = element_text(size = 8),
+    panel.spacing = unit(0.5,"lines"),
+    strip.text.x    = element_text(size = 9),
+    plot.title      = element_text(face = "italic", hjust = 0),
+    legend.position = "none"
+  )
+
+# --------------------
+# Combine the two rows
+# --------------------
+
+
+contact_final_plot <- (p_dd / p_dp) +
+  plot_layout(heights = c(1, 1)) +
+  #plot_annotation(tag_levels = "a") &
+  plot_annotation(tag_levels = "a", tag_prefix = "(", tag_suffix = ")") &
+  theme(
+    legend.position = "none",
+    plot.tag = element_text(
+      #face = "bold",
+      size = 12,
+      hjust = 0, vjust = 1
+    )
+  )
+
+contact_final_plot
+```
+
+
+```{r}
+width_mm  <- 174
+height_mm <- 120
+
+ggsave(
+  filename   = "figures/contact_time_bayes.tiff",
+  plot       = contact_final_plot,
+  width      = width_mm  / 25.4,
+  height     = height_mm / 25.4,
+  units      = "in",
+  dpi        = 600,        # Coral Reefs combo-art requirement
+  compression = "lzw"
+)
+```
+
+list of colonies used
+
+```{r}
+
+library(dplyr)
+library(tidyr)
+
+data_raw<-data
+names(data_raw)
+
+class(data_raw)
+head(data_raw$date_experiment)
+
+
+data_tagged <- data_raw %>%
+  filter(SLS == "yes") %>%
+  mutate(
+    species = recode(Species,
+                     "Desmo"    = "D. dianthus",
+                     "Lophelia" = "D. pertusum"),
+    date_parsed = as.Date(as.character(date_experiment), format = "%Y-%m-%d"),
+    year = as.integer(format(date_parsed, "%Y"))
+  )
+
+colonies_used_contact_time <- data_tagged %>%
+  pivot_longer(
+    cols = c(male, female),
+    names_to = "sex",
+    values_to = "colony_id"
+  ) %>%
+  filter(!is.na(colony_id), colony_id != "") %>%
+  distinct(species, year, sex, colony_id) %>%
+  mutate(label = "Used for contact time") %>%
+  arrange(species, year, sex, colony_id)
+
+colonies_used_contact_time
+
+```
+export
+
+```{r}
+write.table(
+  colonies_used_contact_time,
+  file = "colonies_used_contact_time.txt",
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)
+
+```
+
+
+
+
+
