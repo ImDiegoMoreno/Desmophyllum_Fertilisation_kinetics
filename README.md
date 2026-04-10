@@ -11,11 +11,11 @@ This repository is organised by **analysis module**, corresponding to the main s
 - **Contact_time/**
 
 Each module contains a consistent internal structure:
-module_name/
-├── R/ # R Markdown scripts (analysis workflows)
-├── data/ # Input and processed datasets
-├── figures/ # Generated figures for the manuscript
-└── tables/ # Output tables used in the manuscript and supplements
+folder_name/
+├── R/         # R Markdown scripts (analysis workflows)
+├── data/      # Input and processed datasets
+├── figures/   # Generated figures
+└── tables/    # Output tables (main text and supplementary)
 
 ## Notes
 
