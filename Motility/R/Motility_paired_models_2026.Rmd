@@ -109,10 +109,22 @@ m_prog_pertusum <- fit_prop_species(
 Diagnostics for percentage models
 
 ```{r}
+# eval_brms <- function(fit, label) {
+#   cat("\n============================\n", label, "\n============================\n")
+#   print(summary(fit))
+#   cat("Max Rhat:", max(rhat(fit), na.rm = TRUE), "\n")
+#   print(pp_check(fit))
+# }
+
+
 eval_brms <- function(fit, label) {
   cat("\n============================\n", label, "\n============================\n")
+  # summary (contains Rhat + ESS)
   print(summary(fit))
+  # explicit convergence checks
   cat("Max Rhat:", max(rhat(fit), na.rm = TRUE), "\n")
+  cat("Min ESS ratio:", min(neff_ratio(fit), na.rm = TRUE), "\n")
+  # posterior predictive checks
   print(pp_check(fit))
 }
 
@@ -120,6 +132,10 @@ eval_brms(m_mot_dianthus,  "Motile % — D. dianthus")
 eval_brms(m_mot_pertusum,  "Motile % — D. pertusum")
 eval_brms(m_prog_dianthus, "Progressive % — D. dianthus")
 eval_brms(m_prog_pertusum, "Progressive % — D. pertusum")
+plot(m_mot_dianthus)
+plot(m_mot_pertusum)
+plot(m_prog_dianthus)
+plot(m_prog_pertusum)
 ```
 
 Extract paired posterior differences for percentages
@@ -246,6 +262,10 @@ eval_brms(m_mot_vap_dianthus,  "Motile VAP — D. dianthus")
 eval_brms(m_mot_vap_pertusum,  "Motile VAP — D. pertusum")
 eval_brms(m_prog_vap_dianthus, "Progressive VAP — D. dianthus")
 eval_brms(m_prog_vap_pertusum, "Progressive VAP — D. pertusum")
+plot(m_mot_vap_dianthus)
+plot(m_mot_vap_pertusum)
+plot(m_prog_vap_dianthus)
+plot(m_prog_vap_pertusum)
 ```
 Extract paired posterior differences for VAP
 
