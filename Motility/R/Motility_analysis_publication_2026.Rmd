@@ -1,0 +1,1685 @@
+---
+title: "Motility_analysis_publication_2026"
+author: "Diego Moreno"
+date: "2026-02-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+read data
+
+```{r}
+db <- read.delim("../Data/analysis_input_sperm_motility.txt") %>%
+  mutate(
+    Species = factor(Species, levels = c("D. pertusum", "D. dianthus"))
+  )
+head(db)
+```
+Binning for trend visualization
+```{r}
+library(dplyr)
+library(ggplot2)
+
+#create bins
+db_binned <- db %>%
+  mutate(time_bin = cut(time_after_spawning_h, 
+                        breaks = c(0, 5, 10, 15, 20, 25, 30, 35, 40), # Define your desired bins
+                        labels = c("0-5", "5-10", "10-15", "15-20", "20-25", "25-30", "30-35", "35-40"), # Labels for bins
+                        include.lowest = TRUE, right = FALSE)) %>% # include_lowest ensures 0 is included, right=FALSE means [a,b)
+  # Convert to factor and reverse levels so earliest times are at the bottom
+  mutate(time_bin = factor(time_bin, levels = rev(levels(time_bin))))
+```
+
+test plot
+
+```{r}
+
+db_bind_summary_motile <- db_binned %>%
+  group_by(Species, time_bin) %>%
+  summarise(
+    mean_motile = mean(Percent_Motile, na.rm = TRUE),
+    sd_motile = sd(Percent_Motile, na.rm = TRUE),
+    n = sum(!is.na(Percent_Motile)),
+    se = sd_motile / sqrt(n),
+    ci_lower = mean_motile - qt(0.975, df = n-1) * se,
+    ci_upper = mean_motile + qt(0.975, df = n-1) * se
+  )
+
+db_bind_summary_motile <- db_bind_summary_motile %>%
+  mutate(time_bin = factor(time_bin, levels = c("0-5", "5-10", "10-15", "15-20", "20-25", "25-30", "30-35", "35-40")))
+
+
+ggplot(db_bind_summary_motile, aes(x = time_bin, y = mean_motile, group = Species, colour = Species)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+  scale_colour_manual(values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd")) +
+  theme_minimal()
+```
+
+
+function for ploting
+
+```{r}
+
+#labels staggered
+
+time_bin_levels <- c(
+  "0-5", "5-10", "10-15", "15-20",
+  "20-25", "25-30", "30-35", "35-40"
+)
+
+time_bin_labels <- c(
+  "0–5\n", 
+  "\n5–10", 
+  "10–15\n", 
+  "\n15–20",
+  "20–25\n", 
+  "\n25–30", 
+  "30–35\n", 
+  "\n35–40"
+)
+
+
+plot_time_bin <- function(data, var, y_label) {
+
+  summary_data <- data %>%
+    group_by(Species, time_bin) %>%
+    summarise(
+      n = sum(!is.na(.data[[var]])),
+      mean_val = mean(.data[[var]], na.rm = TRUE),
+      sd_val   = sd(.data[[var]], na.rm = TRUE),
+      se       = ifelse(n > 1, sd_val / sqrt(n), NA_real_),
+      ci_lower = ifelse(n > 1, mean_val - qt(0.975, df = n-1) * se, NA_real_),
+      ci_upper = ifelse(n > 1, mean_val + qt(0.975, df = n-1) * se, NA_real_),
+      .groups = "drop"
+    ) %>%
+    mutate(time_bin = factor(time_bin, levels = time_bin_levels))
+
+  ggplot(summary_data, aes(x = time_bin, y = mean_val, group = Species, colour = Species)) +
+    geom_line(size = 1.2) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = ci_lower, ymax = ci_upper), width = 0.2) +
+    scale_colour_manual(
+      values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+      labels = c(expression(italic("D. pertusum")),
+                 expression(italic("D. dianthus")))
+    ) +
+    scale_x_discrete(labels = time_bin_labels) +
+    labs(x = "Time after spawning (hrs)", y = y_label, colour = "Species") +
+    theme_minimal(base_size = 12) +
+    theme(
+      axis.line = element_line(linewidth = 0.7, colour = "black"),
+      axis.ticks = element_line(linewidth = 0.7),
+      axis.ticks.length = unit(0.1, "cm")
+    )
+}
+
+```
+
+using the function
+
+```{r}
+# Percentages
+p_motile <- plot_time_bin(db_binned, "Percent_Motile", "Mean Percent Motile (%)")
+p_progressive <- plot_time_bin(db_binned, "Percent_Progressive", "Mean Percent Progressive (%)")
+p_total_motile <- plot_time_bin(db_binned, "Percent_Total_Motile", "Mean Percent Total Motile (%)")
+p_percent_slow <- plot_time_bin(db_binned, "percent_slow", "Mean Percent Slow (%)")
+
+# Average Motile velocities
+p_avg_motile_vcl <- plot_time_bin(db_binned, "Avg_Motile_VCL", "Mean Motile VCL (µm/s)")
+p_avg_motile_vap <- plot_time_bin(db_binned, "Avg_Motile_VAP", "Mean Motile VAP (µm/s)")
+p_avg_motile_vsl <- plot_time_bin(db_binned, "Avg_Motile_VSL", "Mean Motile VSL (µm/s)")
+
+# Average Progressive Motile velocities
+p_avg_prog_motile_vcl <- plot_time_bin(db_binned, "Avg_Prog_Motile_VCL", "Mean Progressive Motile VCL (µm/s)")
+p_avg_prog_motile_vap <- plot_time_bin(db_binned, "Avg_Prog_Motile_VAP", "Mean Progressive Motile VAP (µm/s)")
+p_avg_prog_motile_vsl <- plot_time_bin(db_binned, "Avg_Prog_Motile_VSL", "Mean Progressive Motile VSL (µm/s)")
+
+# Average Total Motile velocities
+p_avg_tot_motile_vcl <- plot_time_bin(db_binned, "Avg_Tot_Motile_VCL", "Mean Total Motile VCL (µm/s)")
+p_avg_tot_motile_vap <- plot_time_bin(db_binned, "Avg_Tot_Motile_VAP", "Mean Total Motile VAP (µm/s)")
+p_avg_tot_motile_vsl <- plot_time_bin(db_binned, "Avg_Tot_Motile_VSL", "Mean Total Motile VSL (µm/s)")
+
+#print
+print(p_motile)
+print(p_progressive)
+print(p_total_motile)
+print(p_percent_slow)
+
+print(p_avg_motile_vap)
+print(p_avg_prog_motile_vap)
+print(p_avg_tot_motile_vap)
+```
+
+```{r}
+db_binned %>% filter(Species == "D. dianthus") %>% filter(time_after_spawning_h > 25)
+```
+
+make the plot for export
+
+```{r}
+library(patchwork)
+
+p_motile + p_progressive + plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "a", tag_prefix = "(", tag_suffix = ")")
+```
+
+testing a smooth line
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(brms)
+db2 <- db %>%
+  mutate(
+    prop_progressive = pmin(pmax(Percent_Progressive / 100, 0.001), 0.999)
+  )
+
+
+mod_bayes <- brm(
+  prop_progressive ~ Species + s(time_after_spawning_h, by = Species, k = 4),
+  data = db2,
+  family = Beta(),
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+
+newdat <- expand.grid(
+  time_after_spawning_h = seq(0, 40, length.out = 100),
+  Species = unique(db2$Species)
+)
+
+pred <- fitted(mod_bayes, newdata = newdat)
+
+plotdat <- cbind(newdat, as.data.frame(pred)) %>%
+  mutate(
+    Estimate = Estimate * 100,
+    Q2.5 = Q2.5 * 100,
+    Q97.5 = Q97.5 * 100
+  )
+
+ggplot(plotdat, aes(x = time_after_spawning_h, y = Estimate, colour = Species)) +
+  geom_line(linewidth = 1.2) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5, fill = Species), alpha = 0.2, colour = NA) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Predicted Percent Progressive (%)"
+  ) +
+  theme_minimal()
+```
+```{r}
+# Prepare raw data for Bayesian model
+db2 <- db %>%
+  filter(
+    !is.na(Percent_Progressive),
+    !is.na(time_after_spawning_h),
+    !is.na(Species)
+  ) %>%
+  mutate(
+    prop_progressive = Percent_Progressive / 100,
+    prop_progressive = pmin(pmax(prop_progressive, 0.001), 0.999),
+    Species = factor(Species)
+  )
+
+# Weakly regularising priors
+priors <- c(
+  prior(normal(0, 1.5), class = "b"),
+  prior(exponential(1), class = "sds"),
+  prior(gamma(2, 0.1), class = "phi")
+)
+
+# Bayesian model on full continuous time data
+mod_bayes <- brm(
+  formula = prop_progressive ~ Species + s(time_after_spawning_h, by = Species, k = 4),
+  data = db2,
+  family = Beta(),
+  prior = priors,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+
+# Optional checks
+print(summary(mod_bayes))
+pp_check(mod_bayes)
+
+# Prediction grid across observed time range
+newdat <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db2$time_after_spawning_h),
+    max(db2$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db2$Species)
+)
+
+pred <- fitted(mod_bayes, newdata = newdat)
+
+plotdat <- cbind(newdat, as.data.frame(pred)) %>%
+  mutate(
+    Estimate = Estimate * 100,
+    Q2.5 = Q2.5 * 100,
+    Q97.5 = Q97.5 * 100
+  )
+
+# Bayesian smooth plot
+p_progressive_bayes <- ggplot(
+  plotdat,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, colour = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  geom_point(
+  data = db2,
+  aes(x = time_after_spawning_h, y = Percent_Progressive, colour = Species),
+  alpha = 0.2,
+  inherit.aes = FALSE)+
+  scale_fill_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Predicted Percent Progressive (%)",
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(ylim = c(0, 30)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+print(p_progressive_bayes)
+
+unique(db$Species)
+table(db$Species)
+```
+trying with k=3
+
+```{r}
+# Prepare raw data for Bayesian model
+db2 <- db %>%
+  filter(
+    !is.na(Percent_Progressive),
+    !is.na(time_after_spawning_h),
+    !is.na(Species)
+  ) %>%
+  mutate(
+    prop_progressive = Percent_Progressive / 100,
+    prop_progressive = pmin(pmax(prop_progressive, 0.001), 0.999),
+    Species = factor(Species)
+  )
+
+# Weakly regularising priors
+priors <- c(
+  prior(normal(0, 1.5), class = "b"),
+  prior(exponential(1), class = "sds"),
+  prior(gamma(2, 0.1), class = "phi")
+)
+
+# Bayesian model on full continuous time data
+mod_bayes <- brm(
+  formula = prop_progressive ~ Species + s(time_after_spawning_h, by = Species, k = 3)+ (1 | male),
+  data = db2,
+  family = Beta(),
+  prior = priors,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+
+# Optional checks
+print(summary(mod_bayes))
+pp_check(mod_bayes)
+
+# Prediction grid across observed time range
+newdat <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db2$time_after_spawning_h),
+    max(db2$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db2$Species)
+)
+
+pred <- fitted(mod_bayes, newdata = newdat, re_formula = NA)
+
+plotdat <- cbind(newdat, as.data.frame(pred)) %>%
+  mutate(
+    Estimate = Estimate * 100,
+    Q2.5 = Q2.5 * 100,
+    Q97.5 = Q97.5 * 100
+  )
+
+# Bayesian smooth plot
+p_progressive_bayes <- ggplot(
+  plotdat,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, colour = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  geom_point(
+  data = db2,
+  aes(x = time_after_spawning_h, y = Percent_Progressive, colour = Species),
+  alpha = 0.2,
+  inherit.aes = FALSE)+
+  scale_fill_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Predicted Percent Progressive (%)",
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(ylim = c(0, 30)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+print(p_progressive_bayes)
+
+unique(db$Species)
+table(db$Species)
+```
+
+another model
+
+```{r}
+# Polynomial Bayesian model with male random intercept
+
+library(dplyr)
+library(ggplot2)
+library(brms)
+
+# Prepare raw data
+db2 <- db %>%
+  filter(
+    !is.na(Percent_Progressive),
+    !is.na(time_after_spawning_h),
+    !is.na(Species),
+    !is.na(male)
+  ) %>%
+  mutate(
+    prop_progressive = Percent_Progressive / 100,
+    prop_progressive = pmin(pmax(prop_progressive, 0.001), 0.999),
+    Species = factor(Species, levels = c("D. pertusum", "D. dianthus")),
+    male = factor(male)
+  )
+
+# Priors
+priors <- c(
+  prior(normal(0, 1.5), class = "b"),
+  prior(exponential(1), class = "sd"),
+  prior(gamma(2, 0.1), class = "phi")
+)
+
+# Fit Bayesian polynomial model
+mod_bayes_poly <- brm(
+  formula = prop_progressive ~ Species * poly(time_after_spawning_h, 2) + (1 | male),
+  data = db2,
+  family = Beta(),
+  prior = priors,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+
+# Model summary and posterior predictive check
+print(summary(mod_bayes_poly))
+pp_check(mod_bayes_poly)
+
+# Prediction grid for population-level predictions
+newdat_poly <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db2$time_after_spawning_h),
+    max(db2$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db2$Species)
+)
+
+pred_poly <- fitted(mod_bayes_poly, newdata = newdat_poly, re_formula = NA)
+
+plotdat_poly <- cbind(newdat_poly, as.data.frame(pred_poly)) %>%
+  mutate(
+    Estimate = Estimate * 100,
+    Q2.5 = Q2.5 * 100,
+    Q97.5 = Q97.5 * 100
+  )
+
+# Plot with raw points
+p_progressive_bayes_poly <- ggplot(
+  plotdat_poly,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_point(
+    data = db2,
+    aes(x = time_after_spawning_h, y = Percent_Progressive, colour = Species),
+    alpha = 0.25,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, colour = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  scale_fill_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Predicted Percent Progressive (%)",
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(ylim = c(0, 30)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+print(p_progressive_bayes_poly)
+```
+for motile sperm as well
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(brms)
+library(patchwork)
+
+priors <- c(
+  prior(normal(0, 1.5), class = "b"),
+  prior(exponential(1), class = "sd"),
+  prior(gamma(2, 0.1), class = "phi")
+)
+
+# -----------------------------
+# Progressive
+# -----------------------------
+db_progressive <- db %>%
+  filter(
+    !is.na(Percent_Progressive),
+    !is.na(time_after_spawning_h),
+    !is.na(Species),
+    !is.na(male)
+  ) %>%
+  mutate(
+    prop_progressive = Percent_Progressive / 100,
+    prop_progressive = pmin(pmax(prop_progressive, 0.001), 0.999),
+    Species = factor(Species, levels = c("D. pertusum", "D. dianthus")),
+    male = factor(male)
+  )
+
+mod_bayes_poly_progressive <- brm(
+  formula = prop_progressive ~ Species * poly(time_after_spawning_h, 2) + (1 | male),
+  data = db_progressive,
+  family = Beta(),
+  prior = priors,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+
+newdat_progressive <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db_progressive$time_after_spawning_h),
+    max(db_progressive$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db_progressive$Species)
+)
+
+pred_progressive <- fitted(
+  mod_bayes_poly_progressive,
+  newdata = newdat_progressive,
+  re_formula = NA
+)
+
+plotdat_progressive <- cbind(newdat_progressive, as.data.frame(pred_progressive)) %>%
+  mutate(
+    Estimate = Estimate * 100,
+    Q2.5 = Q2.5 * 100,
+    Q97.5 = Q97.5 * 100
+  )
+
+p_progressive_bayes_poly <- ggplot(
+  plotdat_progressive,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_point(
+    data = db_progressive,
+    aes(x = time_after_spawning_h, y = Percent_Progressive, colour = Species),
+    alpha = 0.25,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, colour = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  scale_fill_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Predicted Percent Progressive (%)",
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(ylim = c(0, 30)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+# -----------------------------
+# Motile
+# -----------------------------
+# -----------------------------
+# Motile
+# -----------------------------
+db_motile <- db %>%
+  filter(
+    !is.na(Percent_Motile),
+    !is.na(time_after_spawning_h),
+    !is.na(Species),
+    !is.na(male)
+  ) %>%
+  mutate(
+    prop_motile = Percent_Motile / 100,
+    prop_motile = pmin(pmax(prop_motile, 0.001), 0.999),
+    Species = factor(Species, levels = c("D. pertusum", "D. dianthus")),
+    male = factor(male)
+  )
+
+mod_bayes_motile_smooth <- brm(
+  formula = prop_motile ~ Species + s(time_after_spawning_h, by = Species, k = 3) + (1 | male),
+  data = db_motile,
+  family = Beta(),
+  prior = priors,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+
+newdat_motile <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db_motile$time_after_spawning_h),
+    max(db_motile$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db_motile$Species)
+)
+
+pred_motile <- fitted(
+  mod_bayes_motile_smooth,
+  newdata = newdat_motile,
+  re_formula = NA
+)
+
+plotdat_motile <- cbind(newdat_motile, as.data.frame(pred_motile)) %>%
+  mutate(
+    Estimate = Estimate * 100,
+    Q2.5 = Q2.5 * 100,
+    Q97.5 = Q97.5 * 100
+  )
+
+p_motile_bayes_smooth <- ggplot(
+  plotdat_motile,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_point(
+    data = db_motile,
+    aes(x = time_after_spawning_h, y = Percent_Motile, colour = Species),
+    alpha = 0.25,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, colour = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  scale_fill_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Predicted Percent Motile (%)",
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(ylim = c(0, 35)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+# -----------------------------
+# Combined figure
+# -----------------------------
+(p_motile_bayes_smooth + p_progressive_bayes_poly) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "a", tag_prefix = "(", tag_suffix = ")")
+```
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(brms)
+library(patchwork)
+library(grid)
+
+priors <- c(
+  prior(normal(0, 1.5), class = "b"),
+  prior(exponential(1), class = "sd"),
+  prior(gamma(2, 0.1), class = "phi")
+)
+
+# -----------------------------
+# Progressive
+# -----------------------------
+db_progressive <- db %>%
+  filter(
+    !is.na(Percent_Progressive),
+    !is.na(time_after_spawning_h),
+    !is.na(Species),
+    !is.na(male)
+  ) %>%
+  mutate(
+    prop_progressive = Percent_Progressive / 100,
+    prop_progressive = pmin(pmax(prop_progressive, 0.001), 0.999),
+    Species = factor(Species, levels = c("D. pertusum", "D. dianthus")),
+    male = factor(male)
+  )
+
+mod_bayes_progressive_smooth <- brm(
+  formula = prop_progressive ~ Species + s(time_after_spawning_h, by = Species, k = 3) + (1 | male),
+  data = db_progressive,
+  family = Beta(),
+  prior = priors,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.999, max_treedepth = 15)
+)
+
+newdat_progressive <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db_progressive$time_after_spawning_h),
+    max(db_progressive$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db_progressive$Species)
+)
+
+pred_progressive <- fitted(
+  mod_bayes_progressive_smooth,
+  newdata = newdat_progressive,
+  re_formula = NA
+)
+
+plotdat_progressive <- cbind(newdat_progressive, as.data.frame(pred_progressive)) %>%
+  mutate(
+    Estimate = Estimate * 100,
+    Q2.5 = Q2.5 * 100,
+    Q97.5 = Q97.5 * 100
+  )
+
+p_progressive_bayes_smooth <- ggplot(
+  plotdat_progressive,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_point(
+    data = db_progressive,
+    aes(x = time_after_spawning_h, y = Percent_Progressive, colour = Species),
+    alpha = 0.25,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, colour = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(
+      expression(italic("D. pertusum")),
+      expression(italic("D. dianthus"))
+    )
+  ) +
+  scale_fill_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(
+      expression(italic("D. pertusum")),
+      expression(italic("D. dianthus"))
+    )
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Predicted Percent Progressive (%)",
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(ylim = c(0, 30)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+# -----------------------------
+# Motile
+# -----------------------------
+db_motile <- db %>%
+  filter(
+    !is.na(Percent_Motile),
+    !is.na(time_after_spawning_h),
+    !is.na(Species),
+    !is.na(male)
+  ) %>%
+  mutate(
+    prop_motile = Percent_Motile / 100,
+    prop_motile = pmin(pmax(prop_motile, 0.001), 0.999),
+    Species = factor(Species, levels = c("D. pertusum", "D. dianthus")),
+    male = factor(male)
+  )
+
+mod_bayes_motile_smooth <- brm(
+  formula = prop_motile ~ Species + s(time_after_spawning_h, by = Species, k = 3) + (1 | male),
+  data = db_motile,
+  family = Beta(),
+  prior = priors,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.999, max_treedepth = 15)
+)
+
+newdat_motile <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db_motile$time_after_spawning_h),
+    max(db_motile$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db_motile$Species)
+)
+
+pred_motile <- fitted(
+  mod_bayes_motile_smooth,
+  newdata = newdat_motile,
+  re_formula = NA
+)
+
+plotdat_motile <- cbind(newdat_motile, as.data.frame(pred_motile)) %>%
+  mutate(
+    Estimate = Estimate * 100,
+    Q2.5 = Q2.5 * 100,
+    Q97.5 = Q97.5 * 100
+  )
+
+p_motile_bayes_smooth <- ggplot(
+  plotdat_motile,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_point(
+    data = db_motile,
+    aes(x = time_after_spawning_h, y = Percent_Motile, colour = Species),
+    alpha = 0.25,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, colour = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(
+      expression(italic("D. pertusum")),
+      expression(italic("D. dianthus"))
+    )
+  ) +
+  scale_fill_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(
+      expression(italic("D. pertusum")),
+      expression(italic("D. dianthus"))
+    )
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Predicted Percent Motile (%)",
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(ylim = c(0, 35)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+# -----------------------------
+# Combined figure
+# -----------------------------
+fig_motility_time<-(p_motile_bayes_smooth + p_progressive_bayes_smooth) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "a", tag_prefix = "(", tag_suffix = ")")
+fig_motility_time
+head(db_progressive)
+db_progressive %>%
+  filter(time_after_spawning_h > 10 & time_after_spawning_h < 15)
+```
+check models fit
+```{r}
+# 1. Numerical convergence checks
+summary(mod_bayes_progressive_smooth)
+summary(mod_bayes_motile_smooth)
+
+# 2. Trace plots / chain mixing
+plot(mod_bayes_progressive_smooth)
+plot(mod_bayes_motile_smooth)
+
+# 3. Posterior predictive checks
+pp_check(mod_bayes_progressive_smooth)
+pp_check(mod_bayes_motile_smooth)
+
+# Optional: a couple of extra PPC views, still consistent with manuscript style
+pp_check(mod_bayes_progressive_smooth, type = "dens_overlay")
+pp_check(mod_bayes_motile_smooth, type = "dens_overlay")
+```
+
+save plots
+
+```{r}
+ggsave(
+  filename = "Fig_motility_time.tiff",
+  plot = fig_motility_time,
+  device = "tiff",
+  width = 180,
+  height = 90,
+  units = "mm",
+  dpi = 600,
+  compression = "lzw",
+  bg = "white"
+)
+
+# Optional vector version for your own editing / revisions
+ggsave(
+  filename = "Fig_motility_time.pdf",
+  plot = fig_motility_time,
+  width = 180,
+  height = 90,
+  units = "mm",
+  bg = "white"
+)
+```
+
+changing the 0 for NAs
+
+```{r}
+# Polynomial Bayesian model with male random intercept
+
+library(dplyr)
+library(ggplot2)
+library(brms)
+
+# Prepare raw data (convert 0 → NA for testing)
+db2 <- db %>%
+  mutate(
+    Percent_Progressive = ifelse(
+      Motile_Sperm == 0,
+      NA,
+      Percent_Progressive
+    )) %>%
+  filter(
+    !is.na(Percent_Progressive),
+    !is.na(time_after_spawning_h),
+    !is.na(Species),
+    !is.na(male)
+  ) %>%
+  mutate(
+    prop_progressive = Percent_Progressive / 100,
+    prop_progressive = pmin(pmax(prop_progressive, 0.001), 0.999),
+    Species = factor(Species, levels = c("D. pertusum", "D. dianthus")),
+    male = factor(male)
+  )
+
+# Priors
+priors <- c(
+  prior(normal(0, 1.5), class = "b"),
+  prior(exponential(1), class = "sd"),
+  prior(gamma(2, 0.1), class = "phi")
+)
+
+# Fit Bayesian polynomial model
+mod_bayes_poly <- brm(
+  formula = prop_progressive ~ Species * poly(time_after_spawning_h, 2) + (1 | male),
+  data = db2,
+  family = Beta(),
+  prior = priors,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+
+# Model summary and posterior predictive check
+print(summary(mod_bayes_poly))
+pp_check(mod_bayes_poly)
+
+# Prediction grid for population-level predictions
+newdat_poly <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db2$time_after_spawning_h),
+    max(db2$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db2$Species)
+)
+
+pred_poly <- fitted(mod_bayes_poly, newdata = newdat_poly, re_formula = NA)
+
+plotdat_poly <- cbind(newdat_poly, as.data.frame(pred_poly)) %>%
+  mutate(
+    Estimate = Estimate * 100,
+    Q2.5 = Q2.5 * 100,
+    Q97.5 = Q97.5 * 100
+  )
+
+# Plot with raw points (note: now zeros are removed)
+p_progressive_bayes_poly <- ggplot(
+  plotdat_poly,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_point(
+    data = db2,
+    aes(x = time_after_spawning_h, y = Percent_Progressive, colour = Species),
+    alpha = 0.25,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, colour = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  scale_fill_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Predicted Percent Progressive (%)",
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(ylim = c(0, 30)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+print(p_progressive_bayes_poly)
+```
+Trying with a thresshold of minimum 5 motile sperm measured to include them in the model
+
+```{r}
+# Polynomial Bayesian model with combined quality filters
+
+library(dplyr)
+library(ggplot2)
+library(brms)
+
+# Thresholds
+min_total_threshold  <- 100
+#min_motile_threshold <- 5
+# Prepare filtered dataset
+db2 <- db %>%
+  filter(
+    Total_Sperm >= min_total_threshold,
+    #Motile_Sperm >= min_motile_threshold,
+    !is.na(Percent_Progressive),
+    !is.na(time_after_spawning_h),
+    !is.na(Species),
+    !is.na(male)
+  ) %>%
+  mutate(
+    prop_progressive = Percent_Progressive / 100,
+    prop_progressive = pmin(pmax(prop_progressive, 0.001), 0.999),
+    Species = factor(Species, levels = c("D. pertusum", "D. dianthus")),
+    male = factor(male)
+  )
+
+# Check what remains
+print(nrow(db2))
+print(table(db2$Species))
+print(summary(db2$Total_Sperm))
+print(summary(db2$Motile_Sperm))
+
+# Priors
+priors <- c(
+  prior(normal(0, 1.5), class = "b"),
+  prior(exponential(1), class = "sd"),
+  prior(gamma(2, 0.1), class = "phi")
+)
+
+# Fit Bayesian polynomial model
+mod_bayes_poly <- brm(
+  prop_progressive ~ Species * poly(time_after_spawning_h, 2) + (1 | male),
+  data = db2,
+  family = Beta(),
+  prior = priors,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+
+# Model checks
+print(summary(mod_bayes_poly))
+pp_check(mod_bayes_poly)
+
+# Prediction grid
+newdat_poly <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db2$time_after_spawning_h),
+    max(db2$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db2$Species)
+)
+
+pred_poly <- fitted(mod_bayes_poly, newdata = newdat_poly, re_formula = NA)
+
+plotdat_poly <- cbind(newdat_poly, as.data.frame(pred_poly)) %>%
+  mutate(
+    Estimate = Estimate * 100,
+    Q2.5 = Q2.5 * 100,
+    Q97.5 = Q97.5 * 100
+  )
+
+# Plot
+p_progressive_bayes_poly <- ggplot(
+  plotdat_poly,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_point(
+    data = db2,
+    aes(x = time_after_spawning_h, y = Percent_Progressive, colour = Species),
+    alpha = 0.25,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, colour = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  scale_fill_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Predicted Percent Progressive (%)",
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(ylim = c(0, 30)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+print(p_progressive_bayes_poly)
+```
+
+averaging replicates
+
+```{r}
+# Aggregate replicate drops, filter low-quality observations,
+# fit Bayesian polynomial model, and plot results
+
+library(dplyr)
+library(ggplot2)
+library(brms)
+
+# -----------------------------
+# 1. Aggregate replicate drops
+# -----------------------------
+db_agg <- db %>%
+  group_by(date, Species, tube, male, egg_present, time_after_spawning_h) %>%
+  summarise(
+    n_rows = n(),
+    Total_Sperm = mean(Total_Sperm, na.rm = TRUE),
+    Total_Paths = mean(Total_Paths, na.rm = TRUE),
+    Slow_Sperm = mean(Slow_Sperm, na.rm = TRUE),
+    Motile_Sperm = mean(Motile_Sperm, na.rm = TRUE),
+    Progressive_Motile_Sperm = mean(Progressive_Motile_Sperm, na.rm = TRUE),
+    Total_motile_sperm = mean(Total_motile_sperm, na.rm = TRUE),
+    Percent_Motile = mean(Percent_Motile, na.rm = TRUE),
+    Percent_Progressive = mean(Percent_Progressive, na.rm = TRUE),
+    Percent_Total_Motile = mean(Percent_Total_Motile, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Optional quick checks
+print(dim(db))
+print(dim(db_agg))
+print(head(db_agg))
+
+# --------------------------------------
+# 2. Apply thresholds after aggregation
+# --------------------------------------
+min_total_threshold  <- 100
+min_motile_threshold <- 5
+
+db2 <- db_agg %>%
+  filter(
+    #Total_Sperm >= min_total_threshold,
+    #Motile_Sperm >= min_motile_threshold,
+    !is.na(Percent_Progressive),
+    !is.na(time_after_spawning_h),
+    !is.na(Species),
+    !is.na(male)
+  ) %>%
+  mutate(
+    prop_progressive = Percent_Progressive / 100,
+    prop_progressive = pmin(pmax(prop_progressive, 0.001), 0.999),
+    Species = factor(Species, levels = c("D. pertusum", "D. dianthus")),
+    male = factor(male)
+  )
+
+# Optional quick checks
+print(nrow(db2))
+print(table(db2$Species))
+print(summary(db2$Total_Sperm))
+print(summary(db2$Motile_Sperm))
+
+# -----------------------------
+# 3. Set priors
+# -----------------------------
+priors <- c(
+  prior(normal(0, 1.5), class = "b"),
+  prior(exponential(1), class = "sd"),
+  prior(gamma(2, 0.1), class = "phi")
+)
+
+# -----------------------------
+# 4. Fit Bayesian model
+# -----------------------------
+mod_bayes_poly <- brm(
+  formula = prop_progressive ~ Species * poly(time_after_spawning_h, 2) + (1 | male),
+  data = db2,
+  family = Beta(),
+  prior = priors,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.99, max_treedepth = 12)
+)
+
+# -----------------------------
+# 5. Model checks
+# -----------------------------
+print(summary(mod_bayes_poly))
+pp_check(mod_bayes_poly)
+
+# -----------------------------
+# 6. Prediction grid
+# -----------------------------
+newdat_poly <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db2$time_after_spawning_h),
+    max(db2$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db2$Species)
+)
+
+pred_poly <- fitted(mod_bayes_poly, newdata = newdat_poly, re_formula = NA)
+
+plotdat_poly <- cbind(newdat_poly, as.data.frame(pred_poly)) %>%
+  mutate(
+    Estimate = Estimate * 100,
+    Q2.5 = Q2.5 * 100,
+    Q97.5 = Q97.5 * 100
+  )
+
+# -----------------------------
+# 7. Plot
+# -----------------------------
+p_progressive_bayes_poly <- ggplot(
+  plotdat_poly,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_point(
+    data = db2,
+    aes(x = time_after_spawning_h, y = Percent_Progressive, colour = Species),
+    alpha = 0.25,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, colour = NA) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  scale_fill_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(expression(italic("D. pertusum")),
+               expression(italic("D. dianthus")))
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Predicted Percent Progressive (%)",
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(ylim = c(0, 30)) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+print(p_progressive_bayes_poly)
+```
+
+
+create a table for values of motility
+
+```{r}
+
+library(dplyr)
+
+vars <- c(
+  "Percent_Motile",
+  "Percent_Progressive",
+  "Percent_Total_Motile",
+  "Avg_Motile_VAP", "Avg_Prog_Motile_VAP", "Avg_Tot_Motile_VAP",
+  "percent_slow"
+)
+
+# Use db_binned, but DON'T replace NA with 0
+species_bin_summary <- db_binned %>%
+  filter(!is.na(time_bin)) %>%   # keep only rows that fell into a bin
+  group_by(Species, time_bin) %>%
+  summarise(
+    across(
+      all_of(vars),
+      list(
+        mean = ~mean(.x, na.rm = TRUE),
+        sd   = ~sd(.x, na.rm = TRUE),
+        n    = ~sum(!is.na(.x)),
+        ci_l = ~{
+          n <- sum(!is.na(.x)); m <- mean(.x, na.rm = TRUE); s <- sd(.x, na.rm = TRUE)
+          if (n < 2) NA_real_ else m - qt(0.975, df = n-1) * s/sqrt(n)
+        },
+        ci_u = ~{
+          n <- sum(!is.na(.x)); m <- mean(.x, na.rm = TRUE); s <- sd(.x, na.rm = TRUE)
+          if (n < 2) NA_real_ else m + qt(0.975, df = n-1) * s/sqrt(n)
+        }
+      ),
+      .names = "{.col}_{.fn}"
+    ),
+    .groups = "drop"
+  ) %>%
+  arrange(Species, time_bin)
+
+species_bin_summary
+```
+
+editing so it looks nicer 
+```{r}
+
+species_bin_summary_table <- species_bin_summary %>%
+  pivot_longer(
+    cols = -c(Species, time_bin),
+    names_to = c("metric", ".value"),
+    names_pattern = "^(.*)_(mean|sd|n|ci_l|ci_u)$"
+  ) %>%
+  mutate(
+    mean_ci = ifelse(
+      is.na(ci_l),
+      sprintf("%.2f", mean),
+      sprintf("%.2f (%.2f–%.2f)", mean, ci_l, ci_u)
+    )
+  ) %>%
+  select(Species, time_bin, metric, n, mean_ci) %>%
+  arrange(metric, Species, time_bin)
+
+```
+reshape and format
+
+```{r}
+
+
+species_bin_summary_table <- species_bin_summary %>%
+  pivot_longer(
+    cols = -c(Species, time_bin),
+    names_to = c("metric", ".value"),
+    names_pattern = "^(.*)_(mean|sd|n|ci_l|ci_u)$"
+  ) %>%
+  filter(n>0) %>% 
+  mutate(
+    mean_ci = ifelse(
+      is.na(ci_l),
+      sprintf("%.2f", mean),
+      sprintf("%.2f (%.2f–%.2f)", mean, ci_l, ci_u)
+    ),
+    sd_fmt = sprintf("%.2f", sd)
+  ) %>%
+  select(Species, time_bin, metric, n, sd_fmt, mean_ci) %>%
+  rename(sd = sd_fmt) %>%
+  arrange(Species, time_bin, metric)
+
+```
+
+metric names edit
+
+```{r}
+species_bin_summary_table <- species_bin_summary_table %>%
+  mutate(
+    metric = recode(
+      metric,
+      Percent_Motile          = "Percent motile (%)",
+      Percent_Progressive     = "Percent progressive (%)",
+      Percent_Total_Motile    = "Percent total motile (%)",
+      Avg_Motile_VAP          = "Motile VAP (µm s⁻¹)",
+      Avg_Prog_Motile_VAP     = "Progressive motile VAP (µm s⁻¹)",
+      Avg_Tot_Motile_VAP      = "Total motile VAP (µm s⁻¹)",
+      percent_slow            = "Percent slow (%)"
+    )
+  )
+
+```
+
+bins into columns
+
+```{r}
+species_bin_summary_table
+```
+
+order
+
+```{r}
+species_bin_summary_table <- species_bin_summary_table %>%
+  mutate(
+    time_bin = factor(
+      time_bin,
+      levels = c("0-5", "5-10", "10-15", "15-20",
+                 "20-25", "25-30", "30-35", "35-40")
+    )
+  )
+
+species_bin_summary_table <- species_bin_summary_table %>%
+  arrange(time_bin, metric)
+species_bin_summary_table
+```
+export
+
+```{r}
+# write.table(
+#   species_bin_summary_table,
+#   "tables/species_bin_summary_table.txt",
+#   sep = "\t",
+#   row.names = FALSE,
+#   quote = FALSE
+# )
+```
+
+
+Compact table for the paper
+
+```{r}
+library(dplyr)
+library(tidyr)
+
+# keep bin order consistent
+bin_levels <- c("0-5","15-20","25-30")
+db_binned <- db_binned %>%
+  mutate(time_bin = factor(time_bin, levels = bin_levels))
+
+tab_A <- db_binned %>%
+  mutate(time_bin = factor(time_bin, levels = bin_levels)) %>%
+  filter(!is.na(time_bin)) %>%   # <- prevents the NA row
+  group_by(Species, time_bin) %>%
+  summarise(
+    motile_mean = mean(Percent_Motile, na.rm = TRUE),
+    motile_sd   = sd(Percent_Motile, na.rm = TRUE),
+    motile_n    = sum(!is.na(Percent_Motile)),
+    motile_se   = motile_sd / sqrt(motile_n),
+    motile_l    = motile_mean - qt(0.975, df = motile_n - 1) * motile_se,
+    motile_u    = motile_mean + qt(0.975, df = motile_n - 1) * motile_se,
+
+    prog_mean = mean(Percent_Progressive, na.rm = TRUE),
+    prog_sd   = sd(Percent_Progressive, na.rm = TRUE),
+    prog_n    = sum(!is.na(Percent_Progressive)),
+    prog_se   = prog_sd / sqrt(prog_n),
+    prog_l    = prog_mean - qt(0.975, df = prog_n - 1) * prog_se,
+    prog_u    = prog_mean + qt(0.975, df = prog_n - 1) * prog_se,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Motile      = sprintf("%.2f (%.2f–%.2f)", motile_mean, motile_l, motile_u),
+    Progressive = sprintf("%.2f (%.2f–%.2f)", prog_mean, prog_l, prog_u)
+  ) %>%
+  select(Species, time_bin, Motile, Progressive) %>%
+  pivot_wider(
+    names_from = Species,
+    values_from = c(Motile, Progressive),
+    names_glue = "{Species} {.value}"
+  ) %>%
+  arrange(time_bin) %>%
+  mutate(across(-time_bin, ~replace_na(.x, "—"))) %>%
+  rename(Time = time_bin)
+
+tab_A
+
+
+```
+
+table B
+
+```{r}
+# ---- B) Velocity (µm s^-1) ----
+tab_B <- db_binned %>%
+  mutate(time_bin = factor(time_bin, levels = bin_levels)) %>%
+  filter(!is.na(time_bin)) %>%   # <- prevents the NA row
+  group_by(Species, time_bin) %>%
+  summarise(
+    # Motile VAP
+    vap_mean = mean(Avg_Motile_VAP, na.rm = TRUE),
+    vap_sd   = sd(Avg_Motile_VAP, na.rm = TRUE),
+    vap_n    = sum(!is.na(Avg_Motile_VAP)),
+    vap_se   = vap_sd / sqrt(vap_n),
+    vap_l    = vap_mean - qt(0.975, df = vap_n - 1) * vap_se,
+    vap_u    = vap_mean + qt(0.975, df = vap_n - 1) * vap_se,
+
+    # Progressive VAP
+    pvap_mean = mean(Avg_Prog_Motile_VAP, na.rm = TRUE),
+    pvap_sd   = sd(Avg_Prog_Motile_VAP, na.rm = TRUE),
+    pvap_n    = sum(!is.na(Avg_Prog_Motile_VAP)),
+    pvap_se   = pvap_sd / sqrt(pvap_n),
+    pvap_l    = pvap_mean - qt(0.975, df = pvap_n - 1) * pvap_se,
+    pvap_u    = pvap_mean + qt(0.975, df = pvap_n - 1) * pvap_se,
+    .groups = "drop"
+  ) %>%
+  mutate(
+    `Motile VAP` = sprintf("%.2f (%.2f–%.2f)", vap_mean, vap_l, vap_u),
+    `Prog. VAP`  = sprintf("%.2f (%.2f–%.2f)", pvap_mean, pvap_l, pvap_u)
+  ) %>%
+  select(Species, time_bin, `Motile VAP`, `Prog. VAP`) %>%
+  pivot_wider(
+    names_from = Species,
+    values_from = c(`Motile VAP`, `Prog. VAP`),
+    names_glue = "{Species} {.value}"
+  ) %>%
+  arrange(time_bin) %>%
+  mutate(across(-time_bin, ~replace_na(.x, "—"))) %>%
+  rename(Time = time_bin)
+
+tab_B
+
+```
+
+export tables
+
+```{r}
+write.table(tab_A, "tables/TableX_A_motility_proportions.txt",
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+write.table(tab_B, "tables/TableX_B_velocity.txt",
+            sep = "\t", row.names = FALSE, quote = FALSE)
+
+```
+
+
