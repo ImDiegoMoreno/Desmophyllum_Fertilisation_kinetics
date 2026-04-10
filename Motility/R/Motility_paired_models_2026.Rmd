@@ -1,0 +1,495 @@
+---
+title: "Motility_paired_models_2026"
+author: "Diego Moreno"
+date: "2026-02-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+Load packages and Data
+```{r}
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(brms)
+library(ggdist)
+library(tidybayes)
+library(patchwork)
+db<-read.delim("../Data/analysis_input_sperm_motility.txt")
+head(db)
+```
+
+Build paired dataset for percentage responses
+
+```{r}
+egg_df <- db %>%
+  filter(time_after_spawning_h < 15) %>%
+  mutate(
+    egg_present = factor(str_trim(tolower(egg_present)), levels = c("no", "yes")),
+    pair_id = paste(Species, date, tube, male, time_after_spawning_h, sep = "_")
+  )
+
+valid_pairs <- egg_df %>%
+  group_by(pair_id) %>%
+  summarise(n_levels = n_distinct(egg_present), .groups = "drop") %>%
+  filter(n_levels == 2) %>%
+  pull(pair_id)
+
+egg_df_paired <- egg_df %>%
+  filter(pair_id %in% valid_pairs) %>%
+  mutate(pair_id = factor(pair_id))
+
+egg_df_paired %>% count(Species, egg_present)
+
+```
+
+Prepare percentage-response datasets
+```{r}
+prepare_prop_paired <- function(df, response_col) {
+  df %>%
+    filter(!is.na(.data[[response_col]])) %>%
+    mutate(Proportion = .data[[response_col]] / 100) %>%
+    group_by(Species) %>%
+    mutate(
+      N_species = n(),
+      Proportion_t = (Proportion * (N_species - 1) + 0.5) / N_species
+    ) %>%
+    ungroup()
+}
+
+model_data_mot_prop  <- prepare_prop_paired(egg_df_paired, "Percent_Motile")
+model_data_prog_prop <- prepare_prop_paired(egg_df_paired, "Percent_Progressive")
+```
+
+
+Define and fit paired beta models
+
+```{r}
+bf_prop <- bf(
+  Proportion_t ~ egg_present + (1 | pair_id),
+  phi ~ egg_present
+)
+
+priors_prop <- c(
+  prior(normal(0, 1), class = "Intercept"),
+  prior(normal(0, 0.5), class = "b"),
+  prior(normal(2, 1), class = "Intercept", dpar = "phi"),
+  prior(normal(0, 0.5), class = "b", dpar = "phi"),
+  prior(student_t(3, 0, 2.5), class = "sd", group = "pair_id")
+)
+
+fit_prop_species <- function(df, seed) {
+  brm(
+    bf_prop,
+    data = df,
+    family = Beta(link = "logit"),
+    prior = priors_prop,
+    chains = 4, iter = 4000, warmup = 2000,
+    control = list(adapt_delta = 0.99, max_treedepth = 13),
+    seed = seed
+  )
+}
+
+m_mot_dianthus <- fit_prop_species(
+  filter(model_data_mot_prop, Species == "D. dianthus"), seed = 701)
+
+m_mot_pertusum <- fit_prop_species(
+  filter(model_data_mot_prop, Species == "D. pertusum"), seed = 702)
+
+m_prog_dianthus <- fit_prop_species(
+  filter(model_data_prog_prop, Species == "D. dianthus"), seed = 801)
+
+m_prog_pertusum <- fit_prop_species(
+  filter(model_data_prog_prop, Species == "D. pertusum"), seed = 802)
+```
+Diagnostics for percentage models
+
+```{r}
+eval_brms <- function(fit, label) {
+  cat("\n============================\n", label, "\n============================\n")
+  print(summary(fit))
+  cat("Max Rhat:", max(rhat(fit), na.rm = TRUE), "\n")
+  print(pp_check(fit))
+}
+
+eval_brms(m_mot_dianthus,  "Motile % — D. dianthus")
+eval_brms(m_mot_pertusum,  "Motile % — D. pertusum")
+eval_brms(m_prog_dianthus, "Progressive % — D. dianthus")
+eval_brms(m_prog_pertusum, "Progressive % — D. pertusum")
+```
+
+Extract paired posterior differences for percentages
+
+```{r}
+extract_paired_diff_prop <- function(fit, species_label) {
+  pair_levels <- unique(fit$data$pair_id)
+
+  new_no <- data.frame(
+    pair_id = pair_levels,
+    egg_present = factor("no", levels = levels(fit$data$egg_present))
+  )
+  new_yes <- data.frame(
+    pair_id = pair_levels,
+    egg_present = factor("yes", levels = levels(fit$data$egg_present))
+  )
+
+  ep_no  <- posterior_epred(fit, newdata = new_no,  re_formula = NULL)
+  ep_yes <- posterior_epred(fit, newdata = new_yes, re_formula = NULL)
+
+  diff_draws <- rowMeans((ep_yes - ep_no) * 100, na.rm = TRUE)
+
+  data.frame(Species = species_label, diff = diff_draws)
+}
+
+diff_mot <- bind_rows(
+  extract_paired_diff_prop(m_mot_dianthus, "D. dianthus"),
+  extract_paired_diff_prop(m_mot_pertusum, "D. pertusum")
+)
+
+diff_prog <- bind_rows(
+  extract_paired_diff_prop(m_prog_dianthus, "D. dianthus"),
+  extract_paired_diff_prop(m_prog_pertusum, "D. pertusum")
+)
+```
+
+Build paired dataset for VAP responses
+
+```{r}
+motile_vap_min <- 20
+motile_vap_max <- 79
+prog_vap_min   <- 80
+
+prepare_vap_paired <- function(df, response_col, lower = -Inf, upper = Inf) {
+  tmp <- df %>%
+    filter(
+      time_after_spawning_h < 15,
+      !is.na(.data[[response_col]]),
+      .data[[response_col]] >= lower,
+      .data[[response_col]] <= upper
+    ) %>%
+    mutate(
+      egg_present = factor(str_trim(tolower(egg_present)), levels = c("no", "yes")),
+      response = .data[[response_col]],
+      event_id = paste(Species, drop_ID, date, tube, male, time_after_spawning_h, sep = "_")
+    )
+
+  valid_events <- tmp %>%
+    group_by(event_id) %>%
+    summarise(n_levels = n_distinct(egg_present), .groups = "drop") %>%
+    filter(n_levels == 2) %>%
+    pull(event_id)
+
+  tmp %>%
+    filter(event_id %in% valid_events) %>%
+    mutate(
+      event_id = factor(event_id),
+      Species  = factor(Species, levels = c("D. dianthus", "D. pertusum"))
+    )
+}
+
+model_data_mot_vap <- prepare_vap_paired(
+  db, "Avg_Motile_VAP", lower = motile_vap_min, upper = motile_vap_max)
+
+model_data_prog_vap <- prepare_vap_paired(
+  db, "Avg_Prog_Motile_VAP", lower = prog_vap_min, upper = Inf)
+```
+
+Define and fit paired gamma models for VAP
+
+```{r}
+bf_vap <- bf(
+  response ~ egg_present + (1 | event_id),
+  shape ~ egg_present
+)
+
+priors_vap <- c(
+  prior(normal(log(100), 1), class = "Intercept"),
+  prior(normal(0, 0.3), class = "b"),
+  prior(normal(3, 1), class = "Intercept", dpar = "shape"),
+  prior(normal(0, 0.3), class = "b", dpar = "shape"),
+  prior(student_t(3, 0, 2.5), class = "sd", group = "event_id")
+)
+
+fit_vap_species <- function(df, seed) {
+  brm(
+    bf_vap,
+    data = df,
+    family = Gamma(link = "log"),
+    prior = priors_vap,
+    chains = 4, iter = 4000, warmup = 2000,
+    control = list(adapt_delta = 0.99, max_treedepth = 13),
+    seed = seed
+  )
+}
+
+m_mot_vap_dianthus <- fit_vap_species(
+  filter(model_data_mot_vap, Species == "D. dianthus"), seed = 301)
+
+m_mot_vap_pertusum <- fit_vap_species(
+  filter(model_data_mot_vap, Species == "D. pertusum"), seed = 302)
+
+m_prog_vap_dianthus <- fit_vap_species(
+  filter(model_data_prog_vap, Species == "D. dianthus"), seed = 401)
+
+m_prog_vap_pertusum <- fit_vap_species(
+  filter(model_data_prog_vap, Species == "D. pertusum"), seed = 402)
+```
+
+Diagnostics for VAP models
+
+```{r}
+eval_brms(m_mot_vap_dianthus,  "Motile VAP — D. dianthus")
+eval_brms(m_mot_vap_pertusum,  "Motile VAP — D. pertusum")
+eval_brms(m_prog_vap_dianthus, "Progressive VAP — D. dianthus")
+eval_brms(m_prog_vap_pertusum, "Progressive VAP — D. pertusum")
+```
+Extract paired posterior differences for VAP
+
+```{r}
+extract_paired_diff_vap <- function(fit, species_label) {
+  event_levels <- unique(fit$data$event_id)
+
+  new_no <- data.frame(
+    event_id = event_levels,
+    egg_present = factor("no", levels = levels(fit$data$egg_present))
+  )
+  new_yes <- data.frame(
+    event_id = event_levels,
+    egg_present = factor("yes", levels = levels(fit$data$egg_present))
+  )
+
+  mu_no  <- posterior_epred(fit, newdata = new_no,  re_formula = NULL)
+  mu_yes <- posterior_epred(fit, newdata = new_yes, re_formula = NULL)
+
+  diff_draws <- rowMeans(mu_yes - mu_no, na.rm = TRUE)
+
+  data.frame(Species = species_label, diff = diff_draws)
+}
+
+diff_mot_vap <- bind_rows(
+  extract_paired_diff_vap(m_mot_vap_dianthus, "D. dianthus"),
+  extract_paired_diff_vap(m_mot_vap_pertusum, "D. pertusum")
+)
+
+diff_prog_vap <- bind_rows(
+  extract_paired_diff_vap(m_prog_vap_dianthus, "D. dianthus"),
+  extract_paired_diff_vap(m_prog_vap_pertusum, "D. pertusum")
+)
+```
+
+functions for plotting
+
+```{r}
+species_colors <- c("D. dianthus" = "#9467bd", "D. pertusum" = "#f3c300")
+species_levels <- c("D. dianthus", "D. pertusum")
+
+summarise_diff <- function(df) {
+  df %>%
+    group_by(Species) %>%
+    summarise(
+      median  = median(diff, na.rm = TRUE),
+      lower95 = ggdist::hdi(diff, .width = 0.95)[1],
+      upper95 = ggdist::hdi(diff, .width = 0.95)[2],
+      lower66 = ggdist::hdi(diff, .width = 0.66)[1],
+      upper66 = ggdist::hdi(diff, .width = 0.66)[2],
+      .groups = "drop"
+    )
+}
+
+lab_triplet_diff <- function(sum_df, fmt = "%.1f", y_up = 0.14, y_med = -0.10) {
+  list(
+    geom_text(
+      data = sum_df,
+      aes(x = lower95, y = Species, label = sprintf(fmt, lower95)),
+      inherit.aes = FALSE,
+      size = 3.0, color = "grey30", hjust = 1.1,
+      position = position_nudge(y = y_up)
+    ),
+    geom_text(
+      data = sum_df,
+      aes(x = upper95, y = Species, label = sprintf(fmt, upper95)),
+      inherit.aes = FALSE,
+      size = 3.0, color = "grey30", hjust = -0.1,
+      position = position_nudge(y = y_up)
+    ),
+    geom_text(
+      data = sum_df,
+      aes(x = median, y = Species, label = sprintf(fmt, median)),
+      inherit.aes = FALSE,
+      size = 3.2, fontface = "bold", color = "black", vjust = 1.4,
+      position = position_nudge(y = y_med)
+    )
+  )
+}
+
+plot_diffs_fancy <- function(draw_df, sum_df, xlab) {
+  ggplot(draw_df, aes(x = diff, y = Species)) +
+    stat_halfeye(
+      aes(fill = Species, slab_alpha = after_stat(level)),
+      .width = c(0.66, 0.95),
+      point_interval = "median_hdi",
+      trim = TRUE,
+      interval_size = 0,
+      point_size = 0
+    ) +
+    scale_slab_alpha_discrete(range = c(0.66, 0.95), guide = "none") +
+    geom_segment(
+      data = sum_df,
+      aes(x = lower95, xend = upper95, y = Species, yend = Species),
+      inherit.aes = FALSE,
+      linewidth = 1,
+      color = "black"
+    ) +
+    geom_segment(
+      data = sum_df,
+      aes(x = lower66, xend = upper66, y = Species, yend = Species),
+      inherit.aes = FALSE,
+      linewidth = 1.7,
+      color = "black"
+    ) +
+    geom_point(
+      data = sum_df,
+      aes(x = median, y = Species),
+      inherit.aes = FALSE,
+      size = 2.4,
+      color = "black"
+    ) +
+    geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.8, color = "grey40") +
+    lab_triplet_diff(sum_df) +
+    scale_fill_manual(values = species_colors, drop = FALSE) +
+    labs(x = xlab, y = "Species") +
+    theme_classic(base_size = 12) +
+    theme(
+      legend.position = "none",
+      axis.text.y = element_text(face = "italic")
+    ) +
+    coord_cartesian(clip = "off")
+}
+```
+
+build the panels
+
+
+```{r}
+diff_mot      <- diff_mot %>% mutate(Species = factor(Species, levels = species_levels))
+diff_prog     <- diff_prog %>% mutate(Species = factor(Species, levels = species_levels))
+diff_mot_vap  <- diff_mot_vap %>% mutate(Species = factor(Species, levels = species_levels))
+diff_prog_vap <- diff_prog_vap %>% mutate(Species = factor(Species, levels = species_levels))
+
+summary_mot      <- summarise_diff(diff_mot)
+summary_prog     <- summarise_diff(diff_prog)
+summary_mot_vap  <- summarise_diff(diff_mot_vap)
+summary_prog_vap <- summarise_diff(diff_prog_vap)
+
+plot_mot_prop_paired <- plot_diffs_fancy(
+  diff_mot, summary_mot,
+  "Difference (percentage points)"
+)
+
+plot_prog_prop_paired <- plot_diffs_fancy(
+  diff_prog, summary_prog,
+  "Difference (percentage points)"
+)
+
+plot_mot_vap_paired <- plot_diffs_fancy(
+  diff_mot_vap, summary_mot_vap,
+  expression("Difference in VAP ("*mu*"m s"^{-1}*")")
+)
+
+plot_prog_vap_paired <- plot_diffs_fancy(
+  diff_prog_vap, summary_prog_vap,
+  expression("Difference in VAP ("*mu*"m s"^{-1}*")")
+)
+```
+
+Final 2x2 figure
+
+```{r}
+strip_titles <- function(p) {
+  p + labs(title = NULL, subtitle = NULL, caption = NULL) +
+    theme(
+      plot.title = element_blank(),
+      plot.subtitle = element_blank(),
+      plot.caption = element_blank()
+    )
+}
+
+theme_journal <- theme_minimal(base_size = 10, base_family = "Arial") +
+  theme(
+    legend.position = "none",
+    legend.text = element_text(face = "italic"),
+    strip.text = element_blank()
+  )
+
+pA <- strip_titles(plot_mot_prop_paired) +
+  labs(x = "Difference (percentage points)", y = NULL) +
+  theme_journal +
+  theme(axis.text.y = element_text(face = "italic")) +
+  scale_fill_manual(values = species_colors, drop = FALSE) +
+  scale_color_manual(values = species_colors, drop = FALSE)
+
+pB <- strip_titles(plot_prog_prop_paired) +
+  labs(x = "Difference (percentage points)", y = NULL) +
+  theme_journal +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+  ) +
+  scale_fill_manual(values = species_colors, drop = FALSE) +
+  scale_color_manual(values = species_colors, drop = FALSE)
+
+pC <- strip_titles(plot_mot_vap_paired) +
+  labs(x = expression("Difference in VAP ("*mu*"m s"^{-1}*")"), y = NULL) +
+  theme_journal +
+  theme(axis.text.y = element_text(face = "italic")) +
+  scale_fill_manual(values = species_colors, drop = FALSE) +
+  scale_color_manual(values = species_colors, drop = FALSE)
+
+pD <- strip_titles(plot_prog_vap_paired) +
+  labs(x = expression("Difference in VAP ("*mu*"m s"^{-1}*")"), y = NULL) +
+  theme_journal +
+  theme(
+    axis.title.y = element_blank(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank()
+  ) +
+  scale_fill_manual(values = species_colors, drop = FALSE) +
+  scale_color_manual(values = species_colors, drop = FALSE)
+
+fig_2x2 <- (pA | pB) / (pC | pD) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "a", tag_prefix = "(", tag_suffix = ")")
+
+fig_2x2
+```
+export
+
+```{r}
+
+ggsave(
+  filename = "../Figures/Fig_2x2_2.tiff",
+  plot = fig_2x2,
+  device = "tiff",
+  width = 174,
+  height = 120,
+  units = "mm",
+  dpi = 600,
+  compression = "lzw",
+  bg = "white"
+)
+
+quartz(
+  type = "pdf",
+  file = "../Figures/Fig_2x2_2.pdf",
+  width = 174 / 25.4,
+  height = 120 / 25.4
+)
+print(fig_2x2)
+dev.off()
+```
+
