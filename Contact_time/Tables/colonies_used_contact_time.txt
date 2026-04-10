@@ -1,0 +1,11 @@
+species	year	sex	colony_id	label
+D. dianthus	2024	female	49	Used for contact time
+D. dianthus	2024	female	50	Used for contact time
+D. dianthus	2024	male	38	Used for contact time
+D. dianthus	2024	male	41	Used for contact time
+D. dianthus	2024	male	43	Used for contact time
+D. dianthus	2024	male	51	Used for contact time
+D. dianthus	2024	male	52	Used for contact time
+D. dianthus	2024	male	54	Used for contact time
+D. pertusum	2025	female	64	Used for contact time
+D. pertusum	2025	male	79	Used for contact time

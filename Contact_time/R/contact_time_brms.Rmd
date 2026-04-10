@@ -66,6 +66,10 @@ fit_dd <- brm(
 )
 
 ```
+summary
+```{r}
+summary(fit_dd)
+```
 
 D. pertusum (only one cross)
 Weakly informative priors for fixed effects
@@ -88,49 +92,38 @@ fit_dp <- brm(
 )
 ```
 
-checking both models
+Summary
+```{r}
+summary(fit_dp)
+```
+
+Diagnostics both models
 
 ```{r}
-## ---- Diagnostics for D. dianthus ----
+## Diagnostics
 
-# numeric summary (includes R-hat and n_eff)
-summary(fit_dd)
+# convergence checks
+max_rhat_dd <- max(rhat(fit_dd))
+min_neff_dd <- min(neff_ratio(fit_dd))
 
-# quick overall checks
-max_rhat_dd  <- max(rhat(fit_dd))
-min_neff_dd  <- min(neff_ratio(fit_dd))
+max_rhat_dp <- max(rhat(fit_dp))
+min_neff_dp <- min(neff_ratio(fit_dp))
 
 max_rhat_dd
 min_neff_dd
-
-# trace plots for fixed effects
-plot(fit_dd)   # brms default: trace + density for a few parameters
-
-# posterior predictive check (more samples for a better feel)
-pp_check(fit_dd, ndraws = 100)
-
-
-## ---- Diagnostics for D. pertusum ----
-
-summary(fit_dp)
-
-max_rhat_dp  <- max(rhat(fit_dp))
-min_neff_dp  <- min(neff_ratio(fit_dp))
-
 max_rhat_dp
 min_neff_dp
 
+# trace plots (Hit <Return> to see next plot:)
+plot(fit_dd)
 plot(fit_dp)
+
+# posterior predictive checks
+pp_check(fit_dd, ndraws = 100)
 pp_check(fit_dp, ndraws = 100)
-
-
-#how well does it fit?
-bayes_R2(fit_dd)
-bayes_R2(fit_dp)
 ```
 
-
-predictions for plotting
+Make the grids for predictions for plotting
 
 ```{r}
 library(tidybayes)
@@ -155,21 +148,12 @@ make_grid <- function(dat) {
     )
 }
 
-
-
-
 grid_dd <- make_grid(dat_dd) %>% mutate(species = "D. dianthus")
 grid_dp <- make_grid(dat_dp) %>% mutate(species = "D. pertusum")
 
-
-
-
 ```
 
-
-```{r}
-library(tidybayes)
-```
+In D. pertusum two contact times were not possible to make
 
 ```{r}
 # Use only contact_time levels that the D. pertusum model actually saw
@@ -182,7 +166,7 @@ grid_dp_pred <- grid_dp %>%
 ```
 
 
-curves
+Posterior predicted fertilisation probabilities were generated across sperm concentration and contact-time treatments using the fitted Bayesian models on the response scale.
 
 ```{r}
 curves_dd <- grid_dd %>% 
@@ -198,7 +182,6 @@ curves_all <- dplyr::bind_rows(curves_dd, curves_dp)
 
 
 plot
-
 no legend
 ```{r}
 library(ggplot2)
@@ -364,7 +347,7 @@ width_mm  <- 174
 height_mm <- 120
 
 ggsave(
-  filename   = "figures/contact_time_bayes.tiff",
+  filename   = "../Figures/contact_time_bayes.tiff",
   plot       = contact_final_plot,
   width      = width_mm  / 25.4,
   height     = height_mm / 25.4,
@@ -412,17 +395,17 @@ colonies_used_contact_time <- data_tagged %>%
 colonies_used_contact_time
 
 ```
+
 export
 
 ```{r}
 write.table(
   colonies_used_contact_time,
-  file = "colonies_used_contact_time.txt",
+  file = "../Tables/colonies_used_contact_time.txt",
   sep = "\t",
   row.names = FALSE,
   quote = FALSE
 )
-
 ```
 
 
