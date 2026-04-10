@@ -1,0 +1,539 @@
+---
+title: "fertilisation_curves_2026"
+author: "Diego Moreno"
+date: "2026-02-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+load libraries 
+
+```{r}
+library(tidyverse)
+library(brms)
+library(tidybayes)
+library(ggdist)
+library(scales)
+library(cmdstanr)
+```
+
+load database
+
+```{r}
+db <- read.delim("../Data/fertilisation_curves_publication_2026.txt")
+glimpse(db)
+```
+Helper function for plotting concentration
+Function to convert the +1 in conc_log
+
+```{r}
+
+# helper (only needed for plotting on linear concentration)
+to_conc <- function(z) (10^z - 1)
+```
+
+MCMC settings 
+
+```{r}
+# MCMC settings
+chains  <- 4
+iter    <- 4000
+warmup  <- 2000
+cores   <- 4
+seed    <- 123
+```
+
+Prepare *D. dianthus* data
+
+```{r}
+df0_dd <- db %>%
+  filter(species == "D. dianthus") %>%
+  transmute(
+    cross,
+    y   = as.numeric(fertilised),
+    n   = as.numeric(particles),
+    x_sc = as.numeric(conc_log)   # log10(conc + 1) already in db
+  ) %>%
+  filter(!is.na(y), !is.na(n), n > 0, is.finite(x_sc))
+
+if (nrow(df0_dd) == 0) stop("No data found for D. dianthus")
+
+# summary(df0_dd$x_sc)
+# range(df0_dd$x_sc)
+# df0_dd %>% count(cross)
+
+```
+dentify *D. dianthus* crosses that never fertilised
+
+```{r}
+never_fert_crosses_dd <- df0_dd %>%
+  group_by(cross) %>%
+  summarise(total_fert = sum(y), .groups = "drop") %>%
+  filter(total_fert == 0) %>%
+  pull(cross)
+
+never_fert_crosses_dd
+
+df_model_dd <- df0_dd %>%
+  filter(!cross %in% never_fert_crosses_dd)
+
+```
+
+Fit *D. dianthus* hierarchical binomial model
+
+```{r}
+priors_dd <- c(
+  prior(normal(0, 5), class = "Intercept"),
+  prior(normal(0, 3), class = "b"),
+  prior(exponential(1), class = "sd", group = "cross"),
+  prior(lkj(2), class = "cor")
+)
+
+fit_dd <- brm(
+  y | trials(n) ~ 1 + x_sc + (1 + x_sc | cross),
+  data    = df_model_dd,
+  family  = binomial(link = "logit"),
+  prior   = priors_dd,
+  chains  = chains, iter = iter, warmup = warmup, cores = cores,
+  control = list(adapt_delta = 0.97, max_treedepth = 12),
+  seed    = seed,
+  backend = "cmdstanr"
+)
+
+```
+
+Check *D. dianthus* model diagnostics
+
+```{r}
+summary(fit_dd)
+max(rhat(fit_dd), na.rm = TRUE)
+min(neff_ratio(fit_dd), na.rm = TRUE)
+
+plot(fit_dd)
+
+pp_check(fit_dd)
+pp_check(fit_dd, type = "bars", ndraws = 50)
+```
+
+Classify *D. dianthus* crosses at the benchmark concentration
+
+```{r}
+
+c_bench_dd  <- 1e4
+target_prob <- 0.50
+p_cut       <- 0.80
+
+newdata_bench_dd <- tibble(
+  cross = unique(df_model_dd$cross),
+  x_sc  = log10(c_bench_dd + 1),
+  n     = 1L
+)
+
+bench_draws_dd <- add_epred_draws(
+  fit_dd,
+  newdata = newdata_bench_dd,
+  re_formula = NULL
+)
+
+prob_col_dd <- if (".epred" %in% names(bench_draws_dd)) ".epred" else ".value"
+
+bench_summary_dd <- bench_draws_dd %>%
+  group_by(cross) %>%
+  summarise(
+    p_reach_target = mean(!!sym(prob_col_dd) >= target_prob),
+    prob_median    = median(!!sym(prob_col_dd)),
+    .groups = "drop"
+  )
+
+cross_groups_dd <- bench_summary_dd %>%
+  mutate(
+    line_group = if_else(
+      p_reach_target >= p_cut,
+      "D. dianthus – High",
+      "D. dianthus – Low"
+    ),
+    species = "D. dianthus"
+  )
+
+high_crosses_dd <- cross_groups_dd %>%
+  filter(line_group == "D. dianthus – High") %>%
+  pull(cross)
+
+low_crosses_dd <- cross_groups_dd %>%
+  filter(line_group == "D. dianthus – Low") %>%
+  pull(cross)
+```
+
+Generate group-average curves for *D. dianthus*
+
+```{r}
+n_grid <- 120
+
+make_group_curve <- function(fit, df_model, crosses, species_name, group_name, n_grid = 120) {
+  if (length(crosses) == 0) return(tibble())
+
+  r <- df_model %>%
+    filter(cross %in% crosses) %>%
+    summarise(min_x = min(x_sc), max_x = max(x_sc))
+
+  grid <- tibble(
+    x_sc = seq(r$min_x, r$max_x, length.out = n_grid),
+    n    = 1L
+  )
+
+  newdata <- expand_grid(cross = crosses, grid)
+
+  draws <- add_epred_draws(
+    fit,
+    newdata = newdata,
+    re_formula = NULL
+  )
+
+  prob_col <- if (".epred" %in% names(draws)) ".epred" else ".value"
+
+  draws %>%
+    rename(prob = !!sym(prob_col)) %>%
+    group_by(.draw, x_sc) %>%
+    summarise(prob = mean(prob), .groups = "drop") %>%
+    group_by(x_sc) %>%
+    summarise(
+      prob_median = median(prob),
+      prob_lo     = ggdist::hdi(prob, .width = 0.95)[1],
+      prob_hi     = ggdist::hdi(prob, .width = 0.95)[2],
+      .groups     = "drop"
+    ) %>%
+    mutate(
+      concentration = to_conc(x_sc),
+      species       = species_name,
+      line_group    = group_name
+    )
+}
+
+curve_high_dd <- make_group_curve(
+  fit_dd, df_model_dd, high_crosses_dd,
+  "D. dianthus", "D. dianthus – High", n_grid
+)
+
+curve_low_dd <- make_group_curve(
+  fit_dd, df_model_dd, low_crosses_dd,
+  "D. dianthus", "D. dianthus – Low", n_grid
+)
+
+curves_dd <- bind_rows(curve_high_dd, curve_low_dd)
+```
+
+prepare observed points for D. dianthus
+
+```{r}
+obs_points_dd <- df0_dd %>%
+  mutate(
+    concentration = to_conc(x_sc),
+    fert_prop     = y / n,
+    species       = "D. dianthus"
+  ) %>%
+  left_join(cross_groups_dd %>% select(cross, line_group), by = "cross")
+```
+
+Repeat for D. pertusum
+prepare data
+```{r}
+df0_dp <- db %>%
+  filter(species == "D. pertusum") %>%
+  transmute(
+    cross,
+    y    = as.numeric(fertilised),
+    n    = as.numeric(particles),
+    x_sc = as.numeric(conc_log)
+  ) %>%
+  filter(!is.na(y), !is.na(n), n > 0, is.finite(x_sc))
+
+if (nrow(df0_dp) == 0) stop("No data found for D. pertusum")
+
+never_fert_crosses_dp <- df0_dp %>%
+  group_by(cross) %>%
+  summarise(total_fert = sum(y), .groups = "drop") %>%
+  filter(total_fert == 0) %>%
+  pull(cross)
+
+df_model_dp <- df0_dp %>%
+  filter(!cross %in% never_fert_crosses_dp)
+```
+
+Fit D. pertusum model
+
+```{r}
+priors_dp <- c(
+  prior(normal(0, 5), class = "Intercept"),
+  prior(normal(0, 3), class = "b"),
+  prior(exponential(1), class = "sd", group = "cross"),
+  prior(lkj(2), class = "cor")
+)
+
+fit_dp <- brm(
+  y | trials(n) ~ 1 + x_sc + (1 + x_sc | cross),
+  data    = df_model_dp,
+  family  = binomial(link = "logit"),
+  prior   = priors_dp,
+  chains  = chains,
+  iter    = iter,
+  warmup  = warmup,
+  cores   = cores,
+  control = list(adapt_delta = 0.97, max_treedepth = 12),
+  seed    = seed,
+  backend = "cmdstanr"
+)
+```
+
+Diagnostics
+
+```{r}
+summary(fit_dp)
+max(rhat(fit_dp), na.rm = TRUE)
+min(neff_ratio(fit_dp), na.rm = TRUE)
+
+plot(fit_dp)
+
+pp_check(fit_dp)
+pp_check(fit_dp, type = "bars", ndraws = 50)
+```
+
+Benchmark classification for D. pertusum
+
+```{r}
+c_bench_dp <- 1e6
+
+newdata_bench_dp <- tibble(
+  cross = unique(df_model_dp$cross),
+  x_sc  = log10(c_bench_dp + 1),
+  n     = 1L
+)
+
+bench_draws_dp <- add_epred_draws(
+  fit_dp,
+  newdata = newdata_bench_dp,
+  re_formula = NULL
+)
+
+prob_col_dp <- if (".epred" %in% names(bench_draws_dp)) ".epred" else ".value"
+
+bench_summary_dp <- bench_draws_dp %>%
+  group_by(cross) %>%
+  summarise(
+    p_reach_target = mean(!!sym(prob_col_dp) >= target_prob),
+    prob_median    = median(!!sym(prob_col_dp)),
+    .groups = "drop"
+  )
+
+cross_groups_dp <- bench_summary_dp %>%
+  mutate(
+    line_group = if_else(
+      p_reach_target >= p_cut,
+      "D. pertusum – High",
+      "D. pertusum – Low"
+    ),
+    species = "D. pertusum"
+  )
+
+high_crosses_dp <- cross_groups_dp %>%
+  filter(line_group == "D. pertusum – High") %>%
+  pull(cross)
+
+low_crosses_dp <- cross_groups_dp %>%
+  filter(line_group == "D. pertusum – Low") %>%
+  pull(cross)
+```
+
+Group-average curves for D. pertusum
+
+```{r}
+curve_high_dp <- make_group_curve(
+  fit_dp, df_model_dp, high_crosses_dp,
+  "D. pertusum", "D. pertusum – High", n_grid
+)
+
+curve_low_dp <- make_group_curve(
+  fit_dp, df_model_dp, low_crosses_dp,
+  "D. pertusum", "D. pertusum – Low", n_grid
+)
+
+curves_dp <- bind_rows(curve_high_dp, curve_low_dp)
+```
+
+Observed data for D. pertusum plot
+
+```{r}
+obs_points_dp <- df0_dp %>%
+  mutate(
+    concentration = to_conc(x_sc),
+    fert_prop     = y / n,
+    species       = "D. pertusum"
+  ) %>%
+  left_join(cross_groups_dp %>% select(cross, line_group), by = "cross") %>%
+  mutate(
+    line_group = if_else(
+      cross %in% never_fert_crosses_dp,
+      "D. pertusum – Never fertilised",
+      line_group
+    )
+  )
+```
+
+Build combined Figure 4
+
+```{r}
+curves_all <- bind_rows(curves_dd, curves_dp)
+obs_all    <- bind_rows(obs_points_dd, obs_points_dp)
+
+never_lines_dp <- tibble()
+if (length(never_fert_crosses_dp) > 0) {
+  never_lines_dp <- df0_dp %>%
+    filter(cross %in% never_fert_crosses_dp) %>%
+    summarise(
+      x_start = to_conc(min(x_sc, na.rm = TRUE)),
+      x_end   = to_conc(max(x_sc, na.rm = TRUE))
+    ) %>%
+    mutate(line_group = "D. pertusum – Never fertilised")
+}
+
+pal_all <- c(
+  "D. dianthus – High"             = "#9467bd",
+  "D. dianthus – Low"              = "#674884",
+  "D. pertusum – High"             = "#f3c300",
+  "D. pertusum – Low"              = "#614e00",
+  "D. pertusum – Never fertilised" = "#333333"
+)
+
+curves_all <- curves_all %>%
+  mutate(concentration = pmax(concentration, .Machine$double.eps))
+
+obs_all <- obs_all %>%
+  mutate(concentration = pmax(concentration, .Machine$double.eps))
+
+p_both <- ggplot() +
+  geom_ribbon(
+    data = curves_all,
+    aes(x = concentration, ymin = prob_lo, ymax = prob_hi, fill = line_group),
+    alpha = 0.18, colour = NA
+  ) +
+  geom_line(
+    data = curves_all,
+    aes(x = concentration, y = prob_median, colour = line_group),
+    linewidth = 1
+  ) +
+  geom_point(
+    data = obs_all,
+    aes(x = concentration, y = fert_prop, colour = line_group),
+    size = 1.8, alpha = 0.75
+  ) +
+  {if (nrow(never_lines_dp) > 0)
+    geom_segment(
+      data = never_lines_dp,
+      aes(x = x_start, xend = x_end, y = 0, yend = 0, colour = line_group),
+      linetype = 2, linewidth = 1
+    )
+  } +
+  scale_x_log10(
+    breaks = 10^(0:7),
+    labels = trans_format("log10", math_format(10^.x))
+  ) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1),
+    limits = c(0, 1)
+  ) +
+  coord_cartesian(xlim = c(1, 1e7)) +
+  scale_colour_manual(values = pal_all, name = "Species × Group") +
+  scale_fill_manual(values = pal_all, guide = "none") +
+  labs(
+    x = "Sperm concentration (log10 scale)",
+    y = "Fertilisation proportion"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(legend.position = "bottom")
+
+p_both
+```
+Add C50 values to the figure
+
+```{r}
+c50_df <- curves_all %>%
+  mutate(x_sc = log10(concentration + 1)) %>%
+  group_by(line_group) %>%
+  arrange(x_sc, .by_group = TRUE) %>%
+  mutate(
+    p1 = prob_median,
+    p2 = lead(prob_median),
+    x1 = x_sc,
+    x2 = lead(x_sc),
+    crosses = (p1 <= 0.5 & p2 >= 0.5) | (p1 >= 0.5 & p2 <= 0.5)
+  ) %>%
+  filter(crosses) %>%
+  slice(1) %>%
+  summarise(
+    x50_sc = x1 + (0.5 - p1) * (x2 - x1) / (p2 - p1),
+    conc50 = 10^x50_sc - 1,
+    .groups = "drop"
+  ) %>%
+  filter(is.finite(conc50), conc50 > 0)
+
+p_both_c50 <- p_both +
+  geom_segment(
+    data = c50_df,
+    aes(x = conc50, xend = conc50, y = 0, yend = 0.5, colour = line_group),
+    linetype = "dashed",
+    linewidth = 0.6,
+    show.legend = FALSE
+  ) +
+  geom_point(
+    data = c50_df,
+    aes(x = conc50, y = 0.5, colour = line_group),
+    shape = 21,
+    fill = "white",
+    size = 2.6,
+    stroke = 0.8,
+    show.legend = FALSE
+  )
+
+p_both_c50
+```
+export figure
+
+```{r}
+width_mm  <- 174
+height_mm <- 115
+
+quartz(
+  type = "pdf",
+  file = "../Figures/Figure_dose_response_C50.pdf",
+  width = width_mm / 25.4,
+  height = height_mm / 25.4
+)
+print(p_both_c50)
+dev.off()
+
+
+ggsave(
+  filename = "../Figures/Figure_dose_response_C50.tiff",
+  plot     = p_both_c50,
+  device   = "tiff",
+  width    = width_mm / 25.4,
+  height   = height_mm / 25.4,
+  units    = "in",
+  dpi      = 600,
+  compression = "lzw"
+)
+```
+
+Export cross-classification summary tables
+
+```{r}
+write.csv(cross_groups_dd, "../Tables/cross_groups_dianthus.csv", row.names = FALSE)
+write.csv(cross_groups_dp, "../Tables/cross_groups_pertusum.csv", row.names = FALSE)
+write.csv(c50_df, "../Tables/c50_summary.csv", row.names = FALSE)
+```
+
+
