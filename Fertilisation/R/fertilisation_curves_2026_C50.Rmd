@@ -536,4 +536,389 @@ write.csv(cross_groups_dp, "../Tables/cross_groups_pertusum.csv", row.names = FA
 write.csv(c50_df, "../Tables/c50_summary.csv", row.names = FALSE)
 ```
 
+Suplementary table S2
+
+```{r}
+
+library(dplyr)
+library(stringr)
+library(readr)
+
+# ---------- Helper: consistent cross labels ----------
+format_cross_id <- function(cross, species) {
+  cross_std <- cross %>%
+    str_trim() %>%
+    str_replace_all("/", "-") %>%
+    str_replace_all("\\s+", "")
+  
+  case_when(
+    species == "D. dianthus" ~ cross_std %>%
+      str_replace_all("\\b9\\.1\\b", "Dd09") %>%
+      str_replace_all("\\b(\\d+)\\b", "Dd\\1"),
+    species == "D. pertusum" ~ cross_std,
+    TRUE ~ cross_std
+  )
+}
+
+# ---------- Build cross-class lookup ----------
+cross_groups_dd2 <- cross_groups_dd %>%
+  mutate(
+    fert_class = if_else(str_detect(line_group, "High"), "High", "Low"),
+    benchmark_label = "10^4"
+  ) %>%
+  select(cross, species, fert_class, benchmark_label, p_reach_target, prob_median)
+
+if (length(never_fert_crosses_dd) > 0) {
+  cross_groups_dd2 <- bind_rows(
+    cross_groups_dd2,
+    tibble(
+      cross = never_fert_crosses_dd,
+      species = "D. dianthus",
+      fert_class = "Never",
+      benchmark_label = "10^4",
+      p_reach_target = NA_real_,
+      prob_median = NA_real_
+    )
+  )
+}
+
+cross_groups_dp2 <- cross_groups_dp %>%
+  mutate(
+    fert_class = if_else(str_detect(line_group, "High"), "High", "Low"),
+    benchmark_label = "10^6"
+  ) %>%
+  select(cross, species, fert_class, benchmark_label, p_reach_target, prob_median)
+
+if (length(never_fert_crosses_dp) > 0) {
+  cross_groups_dp2 <- bind_rows(
+    cross_groups_dp2,
+    tibble(
+      cross = never_fert_crosses_dp,
+      species = "D. pertusum",
+      fert_class = "Never",
+      benchmark_label = "10^6",
+      p_reach_target = NA_real_,
+      prob_median = NA_real_
+    )
+  )
+}
+
+cross_groups_all <- bind_rows(cross_groups_dd2, cross_groups_dp2) %>%
+  distinct(cross, species, .keep_all = TRUE)
+
+# ---------- Build supplementary table ----------
+table_s2 <- db %>%
+  mutate(
+    date = as.Date(as.character(date), format = "%d-%m-%Y"),
+    cross_label = format_cross_id(cross, species),
+    egg_age_display = if_else(egg_age_imputed, paste0(egg_age.hours, "*"), as.character(egg_age.hours)),
+    sperm_age_display = if_else(sperm_age_imputed, paste0(sperm_age.hours, "*"), as.character(sperm_age.hours))
+  ) %>%
+  left_join(
+    cross_groups_all,
+    by = c("cross", "species")
+  ) %>%
+  group_by(date, species, cross, cross_label, fert_class, benchmark_label) %>%
+  summarise(
+    egg_age_h = first(egg_age_display),
+    sperm_age_h = first(sperm_age_display),
+    p_reach_target = first(p_reach_target),
+    prob_median = first(prob_median),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Date = format(date, "%y-%m-%d"),
+    Species = species,
+    Cross = cross_label,
+    `Fert. class` = fert_class,
+    `Egg age (h)` = egg_age_h,
+    `Sperm age (h)` = sperm_age_h,
+    `Benchmark label` = benchmark_label,
+    `P(fertilisation probability ≥ 0.5 at benchmark)` =
+      if_else(is.na(p_reach_target), NA_character_, format(round(p_reach_target, 3), nsmall = 3)),
+    `Predicted fertilisation at benchmark)` =
+      if_else(is.na(prob_median), NA_character_, format(round(prob_median, 3), nsmall = 3))
+  ) %>%
+  select(
+    Date,
+    Species,
+    Cross,
+    `Fert. class`,
+    `Egg age (h)`,
+    `Sperm age (h)`,
+    `Benchmark label`,
+    `P(fertilisation probability ≥ 0.5 at benchmark)`,
+    `Predicted fertilisation at benchmark)`
+  ) %>%
+  arrange(Species, Date, Cross)
+
+table_s2 <- table_s2 %>%
+  rename(`Predicted fertilisation at benchmark` = `Predicted fertilisation at benchmark)`)
+table_s2
+```
+
+Suplementary figure
+Experiment table
+```{r}
+# ==========================================================
+# Create experiment summary table
+# Used for supplementary table and supplementary figure
+# ==========================================================
+
+cross_groups_dd2 <- cross_groups_dd %>%
+  mutate(fert_class = if_else(str_detect(line_group, "High"), "High", "Low")) %>%
+  select(cross, species, fert_class, p_reach_target, prob_median)
+
+if (length(never_fert_crosses_dd) > 0) {
+  cross_groups_dd2 <- bind_rows(
+    cross_groups_dd2,
+    tibble(
+      cross = never_fert_crosses_dd,
+      species = "D. dianthus",
+      fert_class = "Never",
+      p_reach_target = NA_real_,
+      prob_median = NA_real_
+    )
+  )
+}
+
+cross_groups_dp2 <- cross_groups_dp %>%
+  mutate(fert_class = if_else(str_detect(line_group, "High"), "High", "Low")) %>%
+  select(cross, species, fert_class, p_reach_target, prob_median)
+
+if (length(never_fert_crosses_dp) > 0) {
+  cross_groups_dp2 <- bind_rows(
+    cross_groups_dp2,
+    tibble(
+      cross = never_fert_crosses_dp,
+      species = "D. pertusum",
+      fert_class = "Never",
+      p_reach_target = NA_real_,
+      prob_median = NA_real_
+    )
+  )
+}
+
+cross_groups_all <- bind_rows(cross_groups_dd2, cross_groups_dp2) %>%
+  distinct(cross, species, .keep_all = TRUE)
+
+experiment_table <- db %>%
+  select(any_of(c(
+    "date", "cross", "species",
+    "egg_age.hours", "sperm_age.hours",
+    "egg_age_imputed", "sperm_age_imputed",
+    "concentration", "conc_log",
+    "particles", "fertilised"
+  ))) %>%
+  mutate(
+    date = as.Date(as.character(date), format = "%d-%m-%Y")
+  ) %>%
+  left_join(
+    cross_groups_all %>% select(cross, species, fert_class, p_reach_target, prob_median),
+    by = c("cross", "species")
+  ) %>%
+  group_by(date, species, cross, fert_class) %>%
+  summarise(
+    egg_age_h   = round(median(egg_age.hours, na.rm = TRUE), 1),
+    sperm_age_h = round(median(sperm_age.hours, na.rm = TRUE), 1),
+    egg_age_imputed   = any(egg_age_imputed, na.rm = TRUE),
+    sperm_age_imputed = any(sperm_age_imputed, na.rm = TRUE),
+    concentrations_tested = {
+      conc_vals <- concentration[!is.na(concentration)]
+      if (length(conc_vals) > 0) {
+        paste(sort(unique(conc_vals)), collapse = ", ")
+      } else {
+        paste(signif(sort(unique(10^conc_log - 1)), 3), collapse = ", ")
+      }
+    },
+    total_particles  = sum(particles, na.rm = TRUE),
+    total_fertilised = sum(fertilised, na.rm = TRUE),
+    overall_fert_prop = round(total_fertilised / total_particles, 3),
+    p_reach_target = round(first(p_reach_target), 3),
+    prob_median    = round(first(prob_median), 3),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    benchmark_label = case_when(
+      species == "D. dianthus" ~ "1e4",
+      species == "D. pertusum" ~ "1e6",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  arrange(species, date, fert_class, cross)
+
+experiment_table
+```
+
+```{r}
+write.csv(table_s2, "../Tables/Table_S2_fertilisation_summary.csv", row.names = FALSE)
+
+write.table(
+  table_s2,
+  file = "../Tables/Table_S2_fertilisation_summary.txt",
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE,
+  na = ""
+)
+```
+
+Supplementary figure
+
+```{r}
+## Supplementary Figure S1
+## Sperm concentration ranges tested per cross
+
+# ----------------------------------------------------------
+# Helper: consistent display labels for crosses
+# ----------------------------------------------------------
+format_cross_id <- function(cross, species) {
+  cross_std <- cross %>%
+    stringr::str_trim() %>%
+    stringr::str_replace_all("/", "-") %>%
+    stringr::str_replace_all("\\s+", "")
+  
+  dplyr::case_when(
+    species == "D. dianthus" ~ cross_std %>%
+      stringr::str_replace_all("\\b9\\.1\\b", "Dd09") %>%
+      stringr::str_replace_all("\\b(\\d+)\\b", "Dd\\1"),
+    species == "D. pertusum" ~ cross_std,
+    TRUE ~ cross_std
+  )
+}
+
+# ----------------------------------------------------------
+# Prepare experiment table for plotting
+# Requires: experiment_table
+# ----------------------------------------------------------
+experiment_table_fig <- experiment_table %>%
+  mutate(
+    date = as.Date(date),
+    cross_label = format_cross_id(cross, species),
+    exp_id = paste(format(date, "%Y-%m-%d"), cross_label),
+    fert_class = factor(fert_class, levels = c("High", "Low", "Never"))
+  )
+
+# ----------------------------------------------------------
+# Expand concentration list to long format
+# ----------------------------------------------------------
+df_long <- experiment_table_fig %>%
+  mutate(
+    conc_list = stringr::str_split(concentrations_tested, "\\s*,\\s*")
+  ) %>%
+  tidyr::unnest(conc_list) %>%
+  mutate(
+    concentration = as.numeric(conc_list),
+    conc_log10 = log10(concentration + 1)
+  ) %>%
+  filter(is.finite(conc_log10))
+
+# ----------------------------------------------------------
+# Min-max concentration range per experiment
+# ----------------------------------------------------------
+df_rng <- df_long %>%
+  group_by(species, exp_id, date, cross_label, fert_class) %>%
+  summarise(
+    min_log = min(conc_log10, na.rm = TRUE),
+    max_log = max(conc_log10, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# ----------------------------------------------------------
+# Order by date within species
+# ----------------------------------------------------------
+df_rng <- df_rng %>%
+  group_by(species) %>%
+  arrange(desc(date), cross_label, .by_group = TRUE) %>%
+  mutate(exp_id_plot = factor(exp_id, levels = unique(exp_id))) %>%
+  ungroup()
+
+df_long <- df_long %>%
+  left_join(
+    df_rng %>% select(species, exp_id, exp_id_plot),
+    by = c("species", "exp_id")
+  )
+
+# ----------------------------------------------------------
+# Build the plot
+# ----------------------------------------------------------
+p_fig_s1 <- ggplot() +
+  geom_segment(
+    data = df_rng,
+    aes(
+      x = min_log, xend = max_log,
+      y = exp_id_plot, yend = exp_id_plot,
+      colour = fert_class
+    ),
+    linewidth = 1.2
+  ) +
+  geom_point(
+    data = df_long,
+    aes(
+      x = conc_log10,
+      y = exp_id_plot,
+      colour = fert_class
+    ),
+    shape = 124,
+    size = 4,
+    alpha = 0.9
+  ) +
+  facet_grid(
+    species ~ .,
+    scales = "free_y",
+    space = "free_y",
+    switch = "y"
+  ) +
+  scale_colour_manual(
+    values = c(
+      High  = "#4daf4a",
+      Low   = "#377eb8",
+      Never = "#e41a1c"
+    ),
+    drop = FALSE
+  ) +
+  labs(
+    x = expression(log[10]~"(sperm concentration)"),
+    y = NULL,
+    colour = "Fert class",
+    title = "Sperm concentration ranges tested per cross"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major.y = element_blank(),
+    strip.background = element_rect(fill = "grey90"),
+    strip.placement = "outside"
+  )
+
+p_fig_s1
+```
+
+export
+
+```{r}
+width_mm  <- 174
+height_mm <- 115
+
+quartz(
+  type = "pdf",
+  file = "../Figures/Figure_S1_concentration_ranges.pdf",
+  width = width_mm / 25.4,
+  height = height_mm / 25.4
+)
+print(p_fig_s1)
+dev.off()
+
+ggsave(
+  filename = "../Figures/Figure_S1_concentration_ranges.tiff",
+  plot = p_fig_s1,
+  device = "tiff",
+  width = width_mm / 25.4,
+  height = height_mm / 25.4,
+  units = "in",
+  dpi = 600,
+  compression = "lzw"
+)
+```
+
 
