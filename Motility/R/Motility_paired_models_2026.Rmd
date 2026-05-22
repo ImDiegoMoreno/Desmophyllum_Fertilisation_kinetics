@@ -513,3 +513,31 @@ print(fig_2x2)
 dev.off()
 ```
 
+Table of paired dataset
+
+```{r}
+
+paired_summary_table <- egg_df_paired %>%
+  group_by(Species, egg_present) %>%
+  summarise(
+    n_videos = n(),
+    n_pairs = n_distinct(pair_id),
+    n_sperm_donors = n_distinct(male),
+    n_male_tube_combinations = n_distinct(paste(male, tube, sep = "_")),
+    .groups = "drop"
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = egg_present,
+    values_from = n_videos,
+    names_prefix = "videos_"
+  )
+
+paired_summary_table
+
+write.csv(
+  paired_summary_table,
+  "../Tables/paired_egg_present_absent_summary.csv",
+  row.names = FALSE
+)
+```
+
