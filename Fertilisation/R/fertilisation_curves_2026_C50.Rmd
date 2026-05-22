@@ -922,3 +922,32 @@ ggsave(
 ```
 
 
+
+```{r}
+table_s3 <- experiment_table %>%
+  group_by(species, cross_label) %>%
+  arrange(date, Experiment_n, .by_group = TRUE) %>%
+  mutate(`Experiment within cross` = row_number()) %>%
+  ungroup() %>%
+  transmute(
+    Species = species,
+    Cross = cross_label,
+    Date = format(date, "%y-%m-%d"),
+    `Experiment within cross` = `Experiment within cross`,
+    `Replicate timing` = replicate_timing,
+    `n concentrations` = n_concentrations,
+    `Concentrations tested (sperm mL^-1)` = concentrations_tested
+  ) %>%
+  arrange(Species, Date, Cross, `Experiment within cross`)
+
+write.csv(table_s3, "../Tables/Table_S3_experiment_structure.csv", row.names = FALSE)
+
+write.table(
+  table_s3,
+  "../Tables/Table_S3_experiment_structure.txt",
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)
+```
+
