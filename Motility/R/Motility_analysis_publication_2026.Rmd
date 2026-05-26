@@ -411,3 +411,357 @@ write.table(
 )
 ```
 
+Plot velocities 
+
+```{r}
+## Plot velocity summaries across time bins
+
+velocity_plotdat <- db_binned %>%
+  filter(!is.na(time_bin)) %>%
+  group_by(Species, time_bin) %>%
+  summarise(
+    motile_vap_mean = mean(Avg_Motile_VAP, na.rm = TRUE),
+    motile_vap_se = sd(Avg_Motile_VAP, na.rm = TRUE) / sqrt(sum(!is.na(Avg_Motile_VAP))),
+    prog_vap_mean = mean(Avg_Prog_Motile_VAP, na.rm = TRUE),
+    prog_vap_se = sd(Avg_Prog_Motile_VAP, na.rm = TRUE) / sqrt(sum(!is.na(Avg_Prog_Motile_VAP))),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = c(motile_vap_mean, prog_vap_mean),
+    names_to = "Velocity_type",
+    values_to = "Mean"
+  ) %>%
+  mutate(
+    SE = ifelse(
+      Velocity_type == "motile_vap_mean",
+      motile_vap_se,
+      prog_vap_se
+    ),
+    Velocity_type = recode(
+      Velocity_type,
+      motile_vap_mean = "Motile VAP",
+      prog_vap_mean = "Progressive VAP"
+    ),
+    time_bin = factor(time_bin, levels = all_bin_levels)
+  )
+
+p_velocity_time <- ggplot(
+  velocity_plotdat,
+  aes(
+    x = time_bin,
+    y = Mean,
+    colour = Species,
+    group = Species
+  )
+) +
+  geom_errorbar(
+    aes(ymin = Mean - SE, ymax = Mean + SE),
+    width = 0.15,
+    alpha = 0.7
+  ) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.5) +
+  facet_wrap(~ Velocity_type, scales = "free_y") +
+  scale_colour_manual(
+    values = c("D. pertusum" = "#f3c300", "D. dianthus" = "#9467bd"),
+    labels = c(
+      expression(italic("D. pertusum")),
+      expression(italic("D. dianthus"))
+    )
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = "Velocity VAP",
+    colour = "Species"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+p_velocity_time
+```
+
+Model the velocities 
+preparing data
+```{r}
+## Velocity models and figure
+
+db_vap_motile <- db %>%
+  filter(
+    !is.na(Avg_Motile_VAP),
+    Avg_Motile_VAP > 0,
+    !is.na(time_after_spawning_h),
+    !is.na(Species),
+    !is.na(male)
+  ) %>%
+  mutate(
+    Species = factor(Species, levels = c("D. pertusum", "D. dianthus")),
+    male = factor(male)
+  )
+
+db_vap_progressive <- db %>%
+  filter(
+    !is.na(Avg_Prog_Motile_VAP),
+    Avg_Prog_Motile_VAP > 0,
+    !is.na(time_after_spawning_h),
+    !is.na(Species),
+    !is.na(male)
+  ) %>%
+  mutate(
+    Species = factor(Species, levels = c("D. pertusum", "D. dianthus")),
+    male = factor(male)
+  )
+```
+priors
+
+```{r}
+priors_vap <- c(
+  prior(normal(0, 1.5), class = "b"),
+  prior(exponential(1), class = "sd"),
+  prior(exponential(1), class = "sds"),
+  prior(exponential(1), class = "shape")
+)
+```
+
+models
+
+```{r}
+mod_bayes_vap_motile <- brm(
+  Avg_Motile_VAP ~ Species +
+    s(time_after_spawning_h, by = Species, k = 3) +
+    (1 | male),
+  data = db_vap_motile,
+  family = Gamma(link = "log"),
+  prior = priors_vap,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.999, max_treedepth = 15)
+)
+
+mod_bayes_vap_progressive <- brm(
+  Avg_Prog_Motile_VAP ~ Species +
+    s(time_after_spawning_h, by = Species, k = 3) +
+    (1 | male),
+  data = db_vap_progressive,
+  family = Gamma(link = "log"),
+  prior = priors_vap,
+  chains = 4,
+  cores = 4,
+  iter = 4000,
+  warmup = 2000,
+  seed = 123,
+  control = list(adapt_delta = 0.999, max_treedepth = 15)
+)
+```
+
+summaries
+```{r}
+summary(mod_bayes_vap_motile)
+summary(mod_bayes_vap_progressive)
+
+plot(mod_bayes_vap_motile)
+plot(mod_bayes_vap_progressive)
+
+pp_check(mod_bayes_vap_motile)
+pp_check(mod_bayes_vap_progressive)
+```
+
+prediction grid for motile VAP
+
+```{r}
+## Prediction grid for motile VAP model
+
+newdat_vap_motile <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db_vap_motile$time_after_spawning_h),
+    max(db_vap_motile$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db_vap_motile$Species)
+)
+
+pred_vap_motile <- fitted(
+  mod_bayes_vap_motile,
+  newdata = newdat_vap_motile,
+  re_formula = NA
+)
+
+plotdat_vap_motile <- cbind(
+  newdat_vap_motile,
+  as.data.frame(pred_vap_motile)
+)
+```
+
+prediction grid for progressive VAP
+
+```{r}
+## Prediction grid for progressive VAP model
+
+newdat_vap_progressive <- expand.grid(
+  time_after_spawning_h = seq(
+    min(db_vap_progressive$time_after_spawning_h),
+    max(db_vap_progressive$time_after_spawning_h),
+    length.out = 200
+  ),
+  Species = levels(db_vap_progressive$Species)
+)
+
+pred_vap_progressive <- fitted(
+  mod_bayes_vap_progressive,
+  newdata = newdat_vap_progressive,
+  re_formula = NA
+)
+
+plotdat_vap_progressive <- cbind(
+  newdat_vap_progressive,
+  as.data.frame(pred_vap_progressive)
+)
+```
+
+colours and labels
+
+```{r}
+## Shared colours and labels
+
+species_cols <- c(
+  "D. pertusum" = "#f3c300",
+  "D. dianthus" = "#9467bd"
+)
+
+species_labs <- c(
+  expression(italic("D. pertusum")),
+  expression(italic("D. dianthus"))
+)
+```
+
+plot motile vap
+
+```{r}
+## Plot motile VAP model
+
+p_vap_motile <- ggplot(
+  plotdat_vap_motile,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_point(
+    data = db_vap_motile,
+    aes(
+      x = time_after_spawning_h,
+      y = Avg_Motile_VAP,
+      colour = Species
+    ),
+    alpha = 0.25,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(
+    aes(ymin = Q2.5, ymax = Q97.5),
+    alpha = 0.2,
+    colour = NA
+  ) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = species_cols,
+    labels = species_labs
+  ) +
+  scale_fill_manual(
+    values = species_cols,
+    labels = species_labs
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = expression("Motile VAP ("*mu*"m s"^{-1}*")"),
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(
+    ylim = c(20,75)
+  ) +
+  # coord_cartesian(
+  #   ylim = c(0, max(plotdat_vap_motile$Q97.5, na.rm = TRUE) * 1.05)
+  # ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+p_vap_motile
+```
+
+plot progressive VAP
+
+```{r}
+## Plot progressive VAP model
+
+p_vap_progressive <- ggplot(
+  plotdat_vap_progressive,
+  aes(
+    x = time_after_spawning_h,
+    y = Estimate,
+    colour = Species,
+    fill = Species,
+    group = Species
+  )
+) +
+  geom_point(
+    data = db_vap_progressive,
+    aes(
+      x = time_after_spawning_h,
+      y = Avg_Prog_Motile_VAP,
+      colour = Species
+    ),
+    alpha = 0.25,
+    size = 2,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(
+    aes(ymin = Q2.5, ymax = Q97.5),
+    alpha = 0.2,
+    colour = NA
+  ) +
+  geom_line(linewidth = 1.2) +
+  scale_colour_manual(
+    values = species_cols,
+    labels = species_labs
+  ) +
+  scale_fill_manual(
+    values = species_cols,
+    labels = species_labs
+  ) +
+  labs(
+    x = "Time after spawning (hrs)",
+    y = expression("Progressive VAP ("*mu*"m s"^{-1}*")"),
+    colour = "Species",
+    fill = "Species"
+  ) +
+  coord_cartesian(
+    ylim = c(75,160)
+  ) +
+  #coord_cartesian(
+    #ylim = c(0, max(plotdat_vap_progressive$Q97.5, na.rm = TRUE) * 1.05)
+  #) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.line = element_line(linewidth = 0.7, colour = "black"),
+    axis.ticks = element_line(linewidth = 0.7),
+    axis.ticks.length = unit(0.1, "cm")
+  )
+
+p_vap_progressive
+```
+
