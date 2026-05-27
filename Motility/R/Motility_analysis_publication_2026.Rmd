@@ -233,7 +233,7 @@ p_progressive_bayes_smooth <- ggplot(
   ) +
   labs(
     x = "Time after spawning (hrs)",
-    y = "Predicted Percent Progressive (%)",
+    y = "Percent Progressive (%)",
     colour = "Species",
     fill = "Species"
   ) +
@@ -284,7 +284,7 @@ p_motile_bayes_smooth <- ggplot(
   ) +
   labs(
     x = "Time after spawning (hrs)",
-    y = "Predicted Percent Motile (%)",
+    y = "Percent Motile (%)",
     colour = "Species",
     fill = "Species"
   ) +
@@ -604,14 +604,33 @@ prediction grid for progressive VAP
 ```{r}
 ## Prediction grid for progressive VAP model
 
-newdat_vap_progressive <- expand.grid(
-  time_after_spawning_h = seq(
-    min(db_vap_progressive$time_after_spawning_h),
-    max(db_vap_progressive$time_after_spawning_h),
-    length.out = 200
-  ),
-  Species = levels(db_vap_progressive$Species)
-)
+# newdat_vap_progressive <- expand.grid(
+#   time_after_spawning_h = seq(
+#     min(db_vap_progressive$time_after_spawning_h),
+#     max(db_vap_progressive$time_after_spawning_h),
+#     length.out = 200
+#   ),
+#   Species = levels(db_vap_progressive$Species)
+# )
+
+# prediction grid only for the observations we had 
+
+newdat_vap_progressive <- db_vap_progressive %>%
+  group_by(Species) %>%
+  summarise(
+    min_time = min(time_after_spawning_h, na.rm = TRUE),
+    max_time = max(time_after_spawning_h, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  rowwise() %>%
+  do(data.frame(
+    Species = .$Species,
+    time_after_spawning_h = seq(.$min_time, .$max_time, length.out = 200)
+  )) %>%
+  ungroup() %>%
+  mutate(
+    Species = factor(Species, levels = levels(db_vap_progressive$Species))
+  )
 
 pred_vap_progressive <- fitted(
   mod_bayes_vap_progressive,
@@ -763,5 +782,41 @@ p_vap_progressive <- ggplot(
   )
 
 p_vap_progressive
+```
+
+figure 2 expanded
+
+```{r}
+fig_motility_time_2 <- (p_motile_bayes_smooth + p_progressive_bayes_smooth)/(p_vap_motile+p_vap_progressive) +
+  plot_layout(guides = "collect") +
+  plot_annotation(tag_levels = "a", tag_prefix = "(", tag_suffix = ")") &
+  theme(legend.position = "bottom")
+
+fig_motility_time_2
+```
+
+save
+
+```{r}
+ggsave(
+  filename = "../Figures/Fig2_motility_velocity.tiff",
+  plot = fig_motility_time_2,
+  device = "tiff",
+  width = 174,
+  height = 140,
+  units = "mm",
+  dpi = 600,
+  compression = "lzw",
+  bg = "white"
+)
+
+ggsave(
+  filename = "../Figures/Fig2_motility_velocity.pdf",
+  plot = fig_motility_time_2,
+  width = 174,
+  height = 140,
+  units = "mm",
+  bg = "white"
+)
 ```
 
